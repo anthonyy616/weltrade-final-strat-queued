@@ -1,0 +1,25 @@
+.env
+.venv/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+# Database files
+*.db
+db/
+
+# Logs
+*.log
+logs/
+**/logs/
+
+#Agent folder
+.agent/
+.freebuff/*
+.DS_Store
+
+
+personal/
+agent/
+# Ignore all files in the personal folder except for the README.md file
