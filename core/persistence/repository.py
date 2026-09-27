@@ -485,10 +485,21 @@ class Repository:
         )
         await self._conn().commit()
 
-    async def delete_constant_queue_entry(self, row_id: int):
+    async def delete_constant_queue_entry(self, cycle_id: int, direction: str, slot_index: int):
+        """Delete the queue row for a successfully-released (cycle, direction, slot)."""
         await self._conn().execute(
-            "DELETE FROM constant_queue WHERE id = ?",
-            (row_id,)
+            "DELETE FROM constant_queue WHERE symbol = ? AND cycle_id = ? AND direction = ? AND slot_index = ?",
+            (self.symbol, cycle_id, direction, slot_index)
+        )
+        await self._conn().commit()
+
+    async def bump_constant_queue_retry(self, cycle_id: int, direction: str,
+                                        slot_index: int, retry_count: int):
+        """Persist an incremented retry count for a pending queue row."""
+        await self._conn().execute(
+            """UPDATE constant_queue SET retry_count = ?
+               WHERE symbol = ? AND cycle_id = ? AND direction = ? AND slot_index = ?""",
+            (retry_count, self.symbol, cycle_id, direction, slot_index)
         )
         await self._conn().commit()
 

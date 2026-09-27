@@ -11,16 +11,11 @@ from typing import Optional
 
 # Friendly names for position legs
 LEG_NAMES = {
-      "CenterBuy": "Center Buy (Startup)",
-      "CenterSell": "Center Sell (Startup)",
-      # UP direction (BBS): two buys + one sell
-      "Buy1": "Buy #1 (Pair)",
-      "SingleSell": "Single Sell (Custom)",
-      "Buy2": "Buy #2 (Pair)",
-      # DOWN direction (SSB): two sells + one buy
-      "SingleBuy": "Single Buy (Custom)",
-      "Sell1": "Sell #1 (Pair)",
-      "Sell2": "Sell #2 (Pair)",
+      # Queued Close Strategy legs (this fork) — do not reuse Grid Bounce names
+      "MovingBuy": "Moving Buy",
+      "MovingSell": "Moving Sell",
+      "ConstantBuy": "Constant Buy",
+      "ConstantSell": "Constant Sell",
   }
 
 
@@ -256,6 +251,29 @@ class ActivityLogger:
     def log_error(self, message: str, set_index: Optional[int] = None):
         """Log error message"""
         self._write(f"ERROR: {message}", set_index=set_index)
+
+    def log_cycle_complete(self, cycle: int, reason: str, total_pnl: float = 0.0,
+                           moving_closed: int = 0, constant_closed: int = 0,
+                           set_index: Optional[int] = None):
+        """Log cycle completion with its reason.
+
+        reason: "NORMAL" (both sides reached totals together) or
+        "EARLY_FORCE_CLOSE" (one side finished first, remainder force-closed).
+        Distinct from log_reset — a nuclear reset does not exist in this strategy.
+        """
+        friendly = {
+            "NORMAL": "Both sides reached their closing totals",
+            "EARLY_FORCE_CLOSE": "One side finished first — remaining positions force-closed",
+            "TERMINATE_QUEUE_EXHAUSTED": "Last pending constant close kept failing — terminated and restarting",
+        }.get(reason, reason)
+        self._write_separator()
+        self._write(
+            f"Cycle #{cycle} COMPLETE  |  Reason: {friendly}  |  "
+            f"Moving closed: {moving_closed}  Constant closed: {constant_closed}  |  "
+            f"Cycle P&L: ${total_pnl:+.2f}",
+            set_index=set_index,
+        )
+        self._write_separator()
 
     def log_phase_transition(self, old_phase: str, new_phase: str, set_index: Optional[int] = None):
         """Log phase state transition"""
