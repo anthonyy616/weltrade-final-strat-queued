@@ -75,6 +75,45 @@ CREATE TABLE IF NOT EXISTS trade_history (
     ticket INTEGER DEFAULT 0,
     notes TEXT DEFAULT ''
 );
+
+-- Queued Close Strategy tables (agent/02 §9)
+CREATE TABLE IF NOT EXISTS moving_positions (
+    ticket INTEGER PRIMARY KEY,
+    symbol TEXT NOT NULL,
+    cycle_id INTEGER DEFAULT 0,
+    entry REAL DEFAULT 0.0,
+    tp_price REAL DEFAULT 0.0,
+    sl_price REAL DEFAULT 0.0,
+    direction TEXT DEFAULT '',
+    slot_index INTEGER DEFAULT 0,
+    closed INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS constant_targets (
+    symbol TEXT NOT NULL,
+    cycle_id INTEGER DEFAULT 0,
+    direction TEXT NOT NULL,
+    slot_index INTEGER NOT NULL,
+    price REAL DEFAULT 0.0,
+    fired INTEGER DEFAULT 0,
+    PRIMARY KEY (symbol, cycle_id, direction, slot_index)
+);
+
+CREATE TABLE IF NOT EXISTS constant_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL,
+    cycle_id INTEGER DEFAULT 0,
+    direction TEXT DEFAULT '',
+    slot_index INTEGER DEFAULT 0,
+    retry_count INTEGER DEFAULT 0,
+    enqueued_at REAL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS constant_tickets (
+    ticket INTEGER PRIMARY KEY,
+    symbol TEXT NOT NULL,
+    cycle_id INTEGER DEFAULT 0
+);
 """
 
 # Ensure db directory exists
@@ -350,6 +389,166 @@ class Repository:
                 event['pair_index'], event['direction'], event['price'], 
                 event['lot_size'], event['ticket'], event.get('notes', '')
             )
+        )
+        await self._conn().commit()
+
+    # ========================================================================
+    # QUEUED CLOSE STRATEGY (agent/02 §9)
+    # ========================================================================
+
+    async def save_moving_position(self, ticket: int, cycle_id: int, entry: float,
+                                   tp_price: float, sl_price: float,
+                                   direction: str, slot_index: int, closed: bool = False):
+        await self._conn().execute(
+            """
+            INSERT INTO moving_positions (ticket, symbol, cycle_id, entry, tp_price, sl_price, direction, slot_index, closed)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(ticket) DO UPDATE SET
+                cycle_id=excluded.cycle_id,
+                entry=excluded.entry,
+                tp_price=excluded.tp_price,
+                sl_price=excluded.sl_price,
+                direction=excluded.direction,
+                slot_index=excluded.slot_index,
+                closed=excluded.closed
+            """,
+            (ticket, self.symbol, cycle_id, entry, tp_price, sl_price, direction, slot_index, int(closed))
+        )
+        await self._conn().commit()
+
+    async def get_moving_positions(self, open_only: bool = False) -> List[Dict[str, Any]]:
+        sql = "SELECT * FROM moving_positions WHERE symbol = ?"
+        if open_only:
+            sql += " AND closed = 0"
+        async with self._conn().execute(sql, (self.symbol,)) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+    async def mark_moving_position_closed(self, ticket: int):
+        await self._conn().execute(
+            "UPDATE moving_positions SET closed = 1 WHERE ticket = ?",
+            (ticket,)
+        )
+        await self._conn().commit()
+
+    async def save_constant_targets(self, cycle_id: int, targets: List[Dict[str, Any]]):
+        """Bulk-insert precomputed constant targets for a cycle.
+        Each dict: {direction, slot_index, price, fired}.
+        """
+        await self._conn().execute(
+            "DELETE FROM constant_targets WHERE symbol = ? AND cycle_id = ?",
+            (self.symbol, cycle_id)
+        )
+        for t in targets:
+            await self._conn().execute(
+                """
+                INSERT INTO constant_targets (symbol, cycle_id, direction, slot_index, price, fired)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(symbol, cycle_id, direction, slot_index) DO UPDATE SET
+                    price=excluded.price,
+                    fired=excluded.fired
+                """,
+                (self.symbol, cycle_id, t['direction'], t['slot_index'], t['price'], int(t.get('fired', False)))
+            )
+        await self._conn().commit()
+
+    async def get_constant_targets(self, cycle_id: int) -> List[Dict[str, Any]]:
+        async with self._conn().execute(
+            "SELECT * FROM constant_targets WHERE symbol = ? AND cycle_id = ? ORDER BY direction, slot_index",
+            (self.symbol, cycle_id)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+    async def mark_constant_target_fired(self, cycle_id: int, direction: str, slot_index: int):
+        await self._conn().execute(
+            "UPDATE constant_targets SET fired = 1 WHERE symbol = ? AND cycle_id = ? AND direction = ? AND slot_index = ?",
+            (self.symbol, cycle_id, direction, slot_index)
+        )
+        await self._conn().commit()
+
+    async def enqueue_constant_close(self, cycle_id: int, direction: str,
+                                     slot_index: int, retry_count: int, enqueued_at: float):
+        await self._conn().execute(
+            """
+            INSERT INTO constant_queue (symbol, cycle_id, direction, slot_index, retry_count, enqueued_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (self.symbol, cycle_id, direction, slot_index, retry_count, enqueued_at)
+        )
+        await self._conn().commit()
+
+    async def update_constant_queue_retry(self, row_id: int, retry_count: int):
+        await self._conn().execute(
+            "UPDATE constant_queue SET retry_count = ? WHERE id = ?",
+            (retry_count, row_id)
+        )
+        await self._conn().commit()
+
+    async def delete_constant_queue_entry(self, row_id: int):
+        await self._conn().execute(
+            "DELETE FROM constant_queue WHERE id = ?",
+            (row_id,)
+        )
+        await self._conn().commit()
+
+    async def get_constant_queue(self) -> List[Dict[str, Any]]:
+        async with self._conn().execute(
+            "SELECT * FROM constant_queue WHERE symbol = ? ORDER BY id",
+            (self.symbol,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+    async def clear_constant_queue(self, cycle_id: Optional[int] = None):
+        """Clear this symbol's queue rows; optionally scope to one cycle.
+        Must be called explicitly at cycle end — stale rows with mismatched
+        cycle_id would trip a later reconciliation pass (agent/04).
+        """
+        if cycle_id is None:
+            await self._conn().execute(
+                "DELETE FROM constant_queue WHERE symbol = ?", (self.symbol,)
+            )
+        else:
+            await self._conn().execute(
+                "DELETE FROM constant_queue WHERE symbol = ? AND cycle_id = ?",
+                (self.symbol, cycle_id)
+            )
+        await self._conn().commit()
+
+    async def save_constant_ticket(self, ticket: int, cycle_id: int):
+        await self._conn().execute(
+            "INSERT INTO constant_tickets (ticket, symbol, cycle_id) VALUES (?, ?, ?)",
+            (ticket, self.symbol, cycle_id)
+        )
+        await self._conn().commit()
+
+    async def get_constant_tickets(self) -> List[int]:
+        async with self._conn().execute(
+            "SELECT ticket FROM constant_tickets WHERE symbol = ?",
+            (self.symbol,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [r['ticket'] for r in rows]
+
+    async def delete_constant_ticket(self, ticket: int):
+        await self._conn().execute(
+            "DELETE FROM constant_tickets WHERE ticket = ?",
+            (ticket,)
+        )
+        await self._conn().commit()
+
+    async def clear_constant_tickets(self):
+        await self._conn().execute(
+            "DELETE FROM constant_tickets WHERE symbol = ?",
+            (self.symbol,)
+        )
+        await self._conn().commit()
+
+    async def clear_moving_positions(self):
+        await self._conn().execute(
+            "DELETE FROM moving_positions WHERE symbol = ?",
+            (self.symbol,)
         )
         await self._conn().commit()
 
