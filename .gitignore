@@ -23,3 +23,5 @@ logs/
 personal/
 agent/
 # Ignore all files in the personal folder except for the README.md file
+
+auto_update.bat #for automatic updates on git
