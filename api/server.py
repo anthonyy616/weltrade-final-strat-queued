@@ -64,33 +64,20 @@ async def startup_event():
 # --- Pydantic Models for Config ---
 
 class SymbolConfig(BaseModel):
-    """Config for a single symbol (Grid Bounce Strategy)"""
+    """Config for a single symbol (Queued Close Strategy)"""
     enabled: Optional[bool] = None
+    buy_count: Optional[int] = None
+    sell_count: Optional[int] = None
+    buy_lot: Optional[float] = None
+    sell_lot: Optional[float] = None
+    constant_side: Optional[str] = None
     grid_distance: Optional[float] = None
-    tp_pips: Optional[float] = None
-    sl_pips: Optional[float] = None
-    # Second-entry directional single TP/SL (per-symbol)
-    second_entry_buy_tp_pips: Optional[float] = None
-    second_entry_buy_sl_pips: Optional[float] = None
-    second_entry_sell_tp_pips: Optional[float] = None
-    second_entry_sell_sl_pips: Optional[float] = None
-    # Legacy scalar lots (backward compatibility)
-    pair_buy_lot: Optional[float] = None
-    pair_sell_lot: Optional[float] = None
-    single_lot: Optional[float] = None
-    # New adaptive lot arrays
-    pair_buy_lots: Optional[List[float]] = None
-    pair_sell_lots: Optional[List[float]] = None
-    single_lots: Optional[List[float]] = None
-    max_positions: Optional[int] = None
-    # Multi-set support
-    sets: Optional[int] = None
-    sets_config: Optional[List[Dict[str, Any]]] = None
+    moving_freq: Optional[float] = None
+    constant_freq: Optional[float] = None
 
 class GlobalConfig(BaseModel):
     """Global settings"""
     max_runtime_minutes: Optional[int] = None
-    volatility_tolerance: Optional[str] = None
 
 class ConfigUpdate(BaseModel):
     """Multi-asset config update payload"""
