@@ -101,12 +101,28 @@ class TradingEngine:
             if self._init_mt5():
                 self.stats["reconnects"] += 1
                 logger.info(f"[OK] MT5 reconnected on attempt {attempt}")
+                # Reconciliation runs after a successful reconnect, BEFORE the
+                # tick loop resumes normal processing (agent/02 §10).
+                await self._reconcile_after_reconnect()
                 return True
             
             await asyncio.sleep(self.RECONNECT_DELAY)
         
         logger.critical(f"Failed to reconnect after {self.MAX_RECONNECT_ATTEMPTS} attempts")
         return False
+
+    async def _reconcile_after_reconnect(self):
+        """Replay closures that happened while disconnected, per symbol, so
+        each strategy's queue and counts match the broker before live ticks
+        resume."""
+        for orch in list(self.bot_manager.bots.values()):
+            for symbol, strategy in list(orch.strategies.items()):
+                try:
+                    if getattr(strategy, "running", False):
+                        summary = await strategy.reconcile_on_startup()
+                        logger.info(f"[RECONCILE] {symbol}: {summary}")
+                except Exception as e:
+                    logger.error(f"[RECONCILE] {symbol}: reconciliation failed: {e}")
 
     def _check_mt5_health(self) -> bool:
         """

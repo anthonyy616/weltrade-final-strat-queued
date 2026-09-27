@@ -1,11 +1,11 @@
-"""Strategy orchestration for grid-bounce engine."""
+"""Strategy orchestration for the Queued Close engine."""
 
 # pyright: reportAttributeAccessIssue=false
 
 from typing import Any, Dict, List, Set
 import asyncio
 import time
-from core.engine.grid_bounce_strategy_engine import GridBounceStrategyEngine as GridStrategy
+from core.engine.queued_close_strategy_engine import QueuedCloseStrategyEngine as QCStrategy
 from core.session_logger import SessionLogger
 
 
@@ -19,8 +19,8 @@ class StrategyOrchestrator:
     def __init__(self, config_manager, user_id: str = "default"):
         self.config_manager = config_manager
         self.user_id = user_id
-        # Map symbol -> GridStrategy
-        self.strategies: Dict[str, GridStrategy] = {}
+        # Map symbol -> QCStrategy
+        self.strategies: Dict[str, QCStrategy] = {}
         self.active_symbols: Set[str] = set()
         
         # Session Logger for history tracking
@@ -59,7 +59,7 @@ class StrategyOrchestrator:
             sym_config = self.config_manager.get_symbol_config(sym)
             if sym_config:
                 print(f"[ORCHESTRATOR] Spawning Strategy: {sym}")
-                strategy = GridStrategy(self.config_manager, sym, self.user_id, session_logger=self.session_logger)
+                strategy = QCStrategy(self.config_manager, sym, self.user_id, session_logger=self.session_logger)
                 self.strategies[sym] = strategy
 
         self.active_symbols = enabled_symbols
@@ -92,7 +92,7 @@ class StrategyOrchestrator:
             sym_config = self.config_manager.get_symbol_config(symbol)
             if sym_config and sym_config.get('enabled', False):
                 print(f"[ORCHESTRATOR] Spawning Strategy: {symbol}")
-                strategy = GridStrategy(self.config_manager, symbol, self.user_id, session_logger=self.session_logger)
+                strategy = QCStrategy(self.config_manager, symbol, self.user_id, session_logger=self.session_logger)
                 self.strategies[symbol] = strategy
                 self.active_symbols.add(symbol)
         
@@ -266,6 +266,12 @@ class StrategyOrchestrator:
         first_bot = list(self.strategies.values())[0] if self.strategies else None
         first_status = first_bot.get_status() if first_bot else {}
 
+        # Aggregate moving/constant split (Queued Close status concept)
+        moving_total = sum(s.get('moving_total', 0) for s in per_symbol_status.values())
+        constant_total = sum(s.get('constant_total', 0) for s in per_symbol_status.values())
+        moving_closed = sum(s.get('moving_closed', 0) for s in per_symbol_status.values())
+        constant_closed = sum(s.get('constant_closed', 0) for s in per_symbol_status.values())
+
         return {
             "running": running_any,
             "graceful_stop": graceful_stop_any,
@@ -274,6 +280,12 @@ class StrategyOrchestrator:
             "step": first_status.get('step', 0),
             "iteration": first_status.get('iteration', 0),
             "is_resetting": is_resetting_any,
+            "moving_total": moving_total,
+            "constant_total": constant_total,
+            "moving_closed": moving_closed,
+            "constant_closed": constant_closed,
+            "queue_length": sum(s.get('queue_length', 0) for s in per_symbol_status.values()),
+            "catching_up": any(s.get('catching_up', False) for s in per_symbol_status.values()),
             "active_count": len(self.strategies),
             "strategies": per_symbol_status
         }

@@ -78,6 +78,7 @@ class SymbolConfig(BaseModel):
 class GlobalConfig(BaseModel):
     """Global settings"""
     max_runtime_minutes: Optional[int] = None
+    volatility_tolerance: Optional[str] = None  # accepted but unused in this fork
 
 class ConfigUpdate(BaseModel):
     """Multi-asset config update payload"""
