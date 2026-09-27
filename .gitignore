@@ -26,3 +26,5 @@ agent/
 
 auto_update.bat 
 #for automatic updates on git
+
+sync_log.txt
