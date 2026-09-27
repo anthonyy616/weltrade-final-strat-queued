@@ -10,8 +10,4 @@ pydantic
 aiosqlite
 supabase
 psutil
-<<<<<<< HEAD
 cachetools
-=======
-cachetools
->>>>>>> b8a18a68cdcdd98d618176c2c3192e825c4e1120
