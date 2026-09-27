@@ -325,7 +325,7 @@ class QueuedCloseStrategyEngine:
         ])
 
         moving_leg = "MovingBuy" if self.state.moving_side == "buy" else "MovingSell"
-        constant_leg = "ConstantBuy" if self.state.moving_side == "buy" else "ConstantSell"
+        constant_leg = "ConstantBuy" if self.state.moving_side == "sell" else "ConstantSell"
 
         # Open all moving-side positions, each with its TP/SL slot (1-based, no
         # two positions share a slot).
@@ -627,7 +627,7 @@ class QueuedCloseStrategyEngine:
 
         # --- 2. Drain the queue: one close attempt per pending item ---
         if self.state.close_queue:
-            await self._process_close_queue()
+            await self._process_close_queue(ask, bid)
 
     async def _handle_moving_closure(self, ticket: int, live_tickets: set):
         """Process one moving closure and release its constant queue entry.
@@ -704,12 +704,25 @@ class QueuedCloseStrategyEngine:
             f"Queued constant target {direction}#{slot_index} @ {target.price} "
             f"(released by moving #{released_by})")
 
-    async def _process_close_queue(self):
-        """Attempt one constant close per pending queue item. On failure,
-        requeue with retry_count incremented; if the failing item is the last
-        pending one, terminate all and restart the cycle (agent/02 §8).
+    async def _process_close_queue(self, ask: float, bid: float):
+        """Attempt to close each pending queue item whose target price has
+        actually been reached by the market — never close on release alone.
+        A "down" target fires once bid has fallen to/through it; an "up"
+        target fires once ask has risen to/through it. Items not yet reached
+        stay queued untouched and are re-checked next tick. On a close
+        failure (target reached but broker rejects), requeue with
+        retry_count incremented; if the failing item is the last pending
+        one, terminate all and restart the cycle (agent/02 §8).
         Iterate a snapshot — the real list mutates during the pass."""
         for item in list(self.state.close_queue):
+            target = item.target
+            price_reached = (
+                bid <= target.price if target.direction == "down"
+                else ask >= target.price
+            )
+            if not price_reached:
+                continue  # not yet at this target's level — leave queued
+
             if not self.state.constant_tickets:
                 self.activity_log.log_error(
                     "Queue pending but no open constant tickets remain — clearing queue")
