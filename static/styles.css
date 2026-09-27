@@ -59,3 +59,66 @@ input[type=number]::-webkit-outer-spin-button {
 input[type=number] {
   -moz-appearance: textfield;
 }
+
+/* ===== Mobile optimizations ===== */
+
+/* Prevent iOS auto-zoom: any focusable element must be >= 16px on touch
+   devices. Desktop sizes are restored by the media query below. */
+@media (max-width: 767px), (pointer: coarse) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+
+  /* Comfortable touch targets for buttons and checkbox/radio labels */
+  button,
+  label {
+    min-height: 44px;
+  }
+
+  /* ...except tiny inline controls where 44px would break layout */
+  .autosave-toggle,
+  #autosave-toggle {
+    min-height: 0;
+  }
+
+  label:has(input[type="checkbox"]),
+  label:has(input[type="radio"]) {
+    min-height: 44px;
+  }
+
+  /* Modals: keep them short and let inner lists scroll on small screens */
+  #copy-lots-modal > div {
+    max-height: 85vh;
+    overflow-y: auto;
+  }
+  #login-modal > div {
+    max-height: 85vh;
+    overflow-y: auto;
+  }
+
+  /* Sticky mobile nav needs a solid backdrop so page content scrolling
+     underneath stays readable */
+  #main-content {
+    overflow-x: hidden;
+  }
+}
+
+/* Desktop: restore compact control sizes untouched by the touch rules */
+@media (min-width: 768px) and (pointer: fine) {
+  button,
+  label {
+    min-height: 0;
+  }
+}
+
+/* Dashboard tiles: keep the numeric readouts from wrapping awkwardly */
+#view-dashboard .grid > div {
+  min-width: 0;
+}
+
+/* Sticky mobile tab bar offsets for in-page anchors */
+html {
+  scroll-padding-top: 72px;
+}

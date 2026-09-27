@@ -41,8 +41,8 @@
 
     <div id="login-modal" class="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center">
         <div
-            class="bg-white dark:bg-slate-800 p-8 rounded-lg shadow-2xl w-full max-w-md border border-slate-200 dark:border-slate-700">
-            <h2 class="text-2xl font-bold text-center mb-6 text-blue-500">Weltrade Bot Login</h2>
+            class="bg-white dark:bg-slate-800 p-5 sm:p-8 rounded-lg shadow-2xl w-full max-w-md border border-slate-200 dark:border-slate-700 mx-4">
+            <h2 class="text-xl sm:text-2xl font-bold text-center mb-6 text-blue-500">Weltrade Bot Login</h2>
             <form id="form-login" onsubmit="handleSupabaseLogin(event)" class="space-y-4">
                 <div>
                     <label class="block text-sm font-medium mb-1">Email</label>
@@ -133,13 +133,13 @@
     <!-- Main App Content (hidden until logged in) -->
     <div id="main-content" class="max-w-7xl mx-auto hidden">
         <!-- Header -->
-        <div class="flex justify-between items-center mb-4 md:mb-6">
-            <h1 class="text-lg sm:text-xl md:text-2xl font-bold flex items-center gap-2">
-                <span class="text-blue-500">⚡</span> Weltrade Bot <span id="status-badge"
+        <div class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2 mb-4 md:mb-6">
+            <h1 class="text-lg sm:text-xl md:text-2xl font-bold flex items-center gap-2 flex-wrap">
+                <span class="text-blue-500"></span> Weltrade Bot <span id="status-badge"
                     class="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-slate-200 text-slate-500 dark:bg-slate-800 dark:text-slate-400"><span
                         class="h-2 w-2 rounded-full bg-slate-400"></span> Offline</span>
             </h1>
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
                 <button id="toggle-btn"
                     class="px-3 sm:px-4 py-1 sm:py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs sm:text-sm font-medium rounded shadow-sm"
                     onclick="toggleBot()">Start Bot</button>
@@ -163,7 +163,7 @@
 
         <!-- Mobile Navigation -->
         <div
-            class="flex md:hidden bg-slate-200 dark:bg-slate-800 rounded-lg p-1 border border-slate-300 dark:border-slate-700 w-full mb-4">
+            class="flex md:hidden sticky top-0 z-40 bg-slate-200 dark:bg-slate-800 rounded-lg p-1 border border-slate-300 dark:border-slate-700 w-full mb-4 shadow-md">
             <button onclick="switchTab('dashboard')" id="tab-dashboard"
                 class="flex-1 py-1.5 text-xs font-medium rounded-md bg-white text-blue-700 dark:bg-slate-700 dark:text-blue-300 shadow-sm transition">Dashboard</button>
             <button onclick="switchTab('config')" id="tab-config"
@@ -186,7 +186,7 @@
                     <div class="text-lg sm:text-xl md:text-2xl font-bold mt-1"><span id="pos-count">0</span></div>
                 </div>
                 <div
-                    class="bg-white dark:bg-slate-800 p-2 sm:p-3 md:p-4 rounded-lg border border-slate-200 dark:border-slate-700">
+                    class="bg-white dark:bg-slate-800 p-2 sm:p-3 md:p-4 rounded-lg border border-slate-200 dark:border-slate-700 col-span-2 sm:col-span-1">
                     <div class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase">Moving · Constant</div>
                     <div class="text-lg sm:text-xl md:text-2xl font-bold mt-1"><span id="moving-constant-readout">0/0 ·
                             0/0</span></div>
@@ -911,11 +911,11 @@
             }
 
             container.innerHTML = sessions.map(s => `
-                <div class="flex justify-between items-center p-2 bg-slate-900 rounded border border-slate-700">
-                    <span class="text-sm text-slate-300">${s.name}</span>
+                <div class="flex flex-wrap justify-between items-center gap-2 p-2 bg-slate-900 rounded border border-slate-700">
+                    <span class="text-sm text-slate-300 break-all">${s.name}</span>
                     <div class="flex gap-2">
-                        <button onclick="viewSession('${s.id}')" class="text-xs bg-blue-600 hover:bg-blue-700 px-2 py-1 rounded">View</button>
-                        <button onclick="downloadSession('${s.id}', '${s.name}')" class="text-xs bg-green-600 hover:bg-green-700 px-2 py-1 rounded">Download</button>
+                        <button onclick="viewSession('${s.id}')" class="text-xs bg-blue-600 hover:bg-blue-700 px-3 py-2 rounded">View</button>
+                        <button onclick="downloadSession('${s.id}', '${s.name}')" class="text-xs bg-green-600 hover:bg-green-700 px-3 py-2 rounded">Download</button>
                     </div>
                 </div>
             `).join('');
@@ -1220,13 +1220,13 @@
                                 class="w-full p-1.5 text-sm rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
                         </div>
                     </div>
-                    <div class="flex justify-end">
+                    <div class="flex justify-end gap-1.5">
                         <button type="button" onclick="startSymbol('${symbol}')"
-                            class="text-[10px] bg-green-600 hover:bg-green-700 text-white px-2 py-1 rounded mr-1">Start</button>
+                            class="text-xs bg-green-600 hover:bg-green-700 text-white px-3 py-2 rounded">Start</button>
                         <button type="button" onclick="stopSymbol('${symbol}')"
-                            class="text-[10px] bg-yellow-600 hover:bg-yellow-700 text-white px-2 py-1 rounded mr-1">Stop</button>
+                            class="text-xs bg-yellow-600 hover:bg-yellow-700 text-white px-3 py-2 rounded">Stop</button>
                         <button type="button" onclick="terminateSymbol('${symbol}')"
-                            class="text-[10px] bg-red-700 hover:bg-red-800 text-white px-2 py-1 rounded">Kill</button>
+                            class="text-xs bg-red-700 hover:bg-red-800 text-white px-3 py-2 rounded">Kill</button>
                     </div>
                 </div>
                 `;
@@ -1246,6 +1246,8 @@
 
         // --- 3. UI Helpers ---
         function switchTab(tabId) {
+            // Snap back to top on mobile so the newly shown view starts at its heading
+            if (window.innerWidth < 768) window.scrollTo({ top: 0, behavior: 'smooth' });
             ['dashboard', 'config', 'logs'].forEach(id => {
                 const btn = document.getElementById(`tab-${id}`);
                 if (btn) {
