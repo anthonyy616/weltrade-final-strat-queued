@@ -1,64 +1,77 @@
 import time
-from concurrent.futures import ThreadPoolExecutor
 import MetaTrader5 as mt5
 
-SYMBOL, N, LOT, MAGIC = "FX Vol 20", 55, 0.01, 999001
-FILLING = mt5.ORDER_FILLING_FOK   # if you get retcode 10030, try ORDER_FILLING_IOC
+SYMBOL, LOT, MAGIC, N = "FX Vol 20", 0.01, 999002, 20
+FILLING = mt5.ORDER_FILLING_FOK
 
-def send(req):
-    r = mt5.order_send(req)
-    return (None, 0, 0.0) if r is None else (r.retcode, r.order, r.price)
+def conn():
+    ti = mt5.terminal_info()
+    return (ti.connected, ti.ping_last) if ti else (None, None)
 
-def build(tick):
-    reqs = []
-    for i in range(N):  # interleaved so neither side is systematically later
-        for tag, typ, px in (("B", mt5.ORDER_TYPE_BUY, tick.ask),
-                             ("S", mt5.ORDER_TYPE_SELL, tick.bid)):
-            reqs.append({
-                "action": mt5.TRADE_ACTION_DEAL, "symbol": SYMBOL, "volume": LOT,
-                "type": typ, "price": px, "deviation": 200, "magic": MAGIC,
-                "comment": f"bench{tag}{i}", "type_time": mt5.ORDER_TIME_GTC,
-                "type_filling": FILLING,
-            })
-    return reqs
-
-def close_all(pool):
-    poss = [p for p in (mt5.positions_get(symbol=SYMBOL) or []) if p.magic == MAGIC]
-    tick = mt5.symbol_info_tick(SYMBOL)
-    reqs = []
-    for p in poss:
-        buy = p.type == mt5.ORDER_TYPE_BUY
-        reqs.append({
-            "action": mt5.TRADE_ACTION_DEAL, "symbol": SYMBOL, "position": p.ticket,
-            "volume": p.volume, "type": mt5.ORDER_TYPE_SELL if buy else mt5.ORDER_TYPE_BUY,
-            "price": tick.bid if buy else tick.ask, "deviation": 200,
-            "magic": MAGIC, "type_filling": FILLING,
-        })
-    list(pool.map(send, reqs))
-
-def run(workers):
-    tick = mt5.symbol_info_tick(SYMBOL)
-    reqs = build(tick)
+def market(typ):
+    t = mt5.symbol_info_tick(SYMBOL)
+    px = t.ask if typ == mt5.ORDER_TYPE_BUY else t.bid
+    req = {"action": mt5.TRADE_ACTION_DEAL, "symbol": SYMBOL, "volume": LOT,
+           "type": typ, "price": px, "deviation": 200, "magic": MAGIC,
+           "comment": "probe", "type_time": mt5.ORDER_TIME_GTC,
+           "type_filling": FILLING}
     t0 = time.perf_counter()
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        out = list(pool.map(send, reqs))
-    ms = (time.perf_counter() - t0) * 1000
-    ok = [(rq, o) for rq, o in zip(reqs, out) if o[0] == mt5.TRADE_RETCODE_DONE]
-    buys = [o[2] for rq, o in ok if rq["type"] == mt5.ORDER_TYPE_BUY]
-    sells = [o[2] for rq, o in ok if rq["type"] == mt5.ORDER_TYPE_SELL]
-    codes = {}
-    for o in out:
-        codes[o[0]] = codes.get(o[0], 0) + 1
-    print(f"workers={workers:>2} | {ms:7.0f} ms | filled {len(ok)}/{len(reqs)} | "
-          f"buy range {min(buys, default=0):.3f}-{max(buys, default=0):.3f} | "
-          f"sell range {min(sells, default=0):.3f}-{max(sells, default=0):.3f} | codes {codes}")
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        close_all(pool)
+    r = mt5.order_send(req)
+    return r, (time.perf_counter() - t0) * 1000
+
+def wait_connected(limit=120):
+    t0 = time.perf_counter()
+    while time.perf_counter() - t0 < limit:
+        c, _ = conn()
+        if c:
+            return time.perf_counter() - t0
+        time.sleep(0.5)
+    return None
+
+def close_all():
+    for _ in range(6):
+        poss = [p for p in (mt5.positions_get(symbol=SYMBOL) or []) if p.magic == MAGIC]
+        if not poss:
+            return True
+        for p in poss:
+            t = mt5.symbol_info_tick(SYMBOL)
+            buy = p.type == mt5.ORDER_TYPE_BUY
+            mt5.order_send({"action": mt5.TRADE_ACTION_DEAL, "symbol": SYMBOL,
+                            "position": p.ticket, "volume": p.volume,
+                            "type": mt5.ORDER_TYPE_SELL if buy else mt5.ORDER_TYPE_BUY,
+                            "price": t.bid if buy else t.ask, "deviation": 200,
+                            "magic": MAGIC, "type_filling": FILLING})
+            time.sleep(0.15)
+        time.sleep(1)
+    return False
+
+def probe(delay):
+    calls, filled, fail = [], 0, None
+    for i in range(N):
+        typ = mt5.ORDER_TYPE_BUY if i % 2 == 0 else mt5.ORDER_TYPE_SELL
+        r, ms = market(typ)
+        c, ping = conn()
+        code = r.retcode if r else None
+        calls.append(ms)
+        print(f"  #{i:02d} {ms:7.1f} ms code={code} connected={c} ping_us={ping}")
+        if code != mt5.TRADE_RETCODE_DONE:
+            fail = (i, code, mt5.last_error())
+            break
+        filled += 1
+        if delay:
+            time.sleep(delay)
+    avg = sum(calls) / len(calls) if calls else 0
+    rec = wait_connected() if fail else 0
+    print(f"delay={delay*1000:.0f}ms filled={filled}/{N} avg_call={avg:.1f}ms "
+          f"first_fail={fail} reconnect_s={rec}")
+    print("  closed clean:", close_all())
 
 if __name__ == "__main__":
     assert mt5.initialize(), mt5.last_error()
     mt5.symbol_select(SYMBOL, True)
-    for w in (1, 4, 8, 16, 32):
-        run(w)
-        time.sleep(2)
+    ti = mt5.terminal_info()
+    print("trade_allowed:", ti.trade_allowed, "| connected:", ti.connected)
+    for d in (0.25, 0.1, 0.05, 0.025, 0.01, 0.0):
+        probe(d)
+        time.sleep(10)
     mt5.shutdown()
