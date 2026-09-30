@@ -1,5 +1,7 @@
 import time
 import MetaTrader5 as mt5
+from concurrent.futures import ThreadPoolExecutor
+
 
 SYMBOL, LOT, MAGIC, N = "FX Vol 20", 0.01, 999002, 20
 FILLING = mt5.ORDER_FILLING_FOK
@@ -66,12 +68,44 @@ def probe(delay):
           f"first_fail={fail} reconnect_s={rec}")
     print("  closed clean:", close_all())
 
+
+def req_for(typ, px):
+    return {"action": mt5.TRADE_ACTION_DEAL, "symbol": SYMBOL, "volume": LOT,
+            "type": typ, "price": px, "deviation": 200, "magic": MAGIC,
+            "comment": "probe", "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": FILLING}
+
+def send_req(req):
+    r = mt5.order_send(req)
+    return (r.retcode, r.price) if r else (None, 0.0)
+
+def probe_parallel(workers, pairs=20):
+    t = mt5.symbol_info_tick(SYMBOL)
+    reqs = []
+    for _ in range(pairs):
+        reqs.append(req_for(mt5.ORDER_TYPE_BUY, t.ask))
+        reqs.append(req_for(mt5.ORDER_TYPE_SELL, t.bid))
+    t0 = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        out = list(pool.map(send_req, reqs))
+    wall = (time.perf_counter() - t0) * 1000
+    ok = [(rq, o) for rq, o in zip(reqs, out) if o[0] == mt5.TRADE_RETCODE_DONE]
+    buys = [o[1] for rq, o in ok if rq["type"] == mt5.ORDER_TYPE_BUY]
+    sells = [o[1] for rq, o in ok if rq["type"] == mt5.ORDER_TYPE_SELL]
+    codes = {}
+    for o in out:
+        codes[o[0]] = codes.get(o[0], 0) + 1
+    print(f"workers={workers} wall={wall:.0f}ms filled={len(ok)}/{len(reqs)} "
+          f"buy={min(buys, default=0):.3f}-{max(buys, default=0):.3f} "
+          f"sell={min(sells, default=0):.3f}-{max(sells, default=0):.3f} codes={codes}")
+    if codes.get(10031):
+        print("  reconnect_s:", wait_connected())
+    print("  closed clean:", close_all())
+
 if __name__ == "__main__":
     assert mt5.initialize(), mt5.last_error()
     mt5.symbol_select(SYMBOL, True)
-    ti = mt5.terminal_info()
-    print("trade_allowed:", ti.trade_allowed, "| connected:", ti.connected)
-    for d in (0.25, 0.1, 0.05, 0.025, 0.01, 0.0):
-        probe(d)
+    for w in (1, 2, 4, 8):
+        probe_parallel(w)
         time.sleep(10)
     mt5.shutdown()
