@@ -1,0 +1,12 @@
+In MT5, click File > Open Data Folder. Open the MQL5 folder, then Experts. Save the file from VS Code straight into that folder, or save it anywhere and copy it in. Use your exact Weltrade MT5 install for this, since a second MT5 on the machine has its own data folder.
+In MT5, press F4 to open MetaEditor. In its left panel, find AsyncBurstProbe.mq5 under Experts and double-click it.
+Press F7 to compile. Look at the Errors tab at the bottom of MetaEditor. You want "0 errors". Warnings are fine. If there are errors, paste them to me and I'll fix them, since I haven't been able to compile this myself.
+Back in MT5, make sure Algo Trading is on. The toolbar button should be green with a play icon. Also check Tools > Options > Expert Advisors and tick "Allow algorithmic trading". This setting is separate from the Python API, which is why your bot never needed it.
+Open a chart for the symbol. In Market Watch, right-click FX Vol 20 and pick Chart Window. Make sure you're on the demo account and that your Python bot isn't running.
+In the Navigator panel (Ctrl+N), open Expert Advisors, right-click and refresh if you don't see the new one, and drag AsyncBurstProbe onto the FX Vol 20 chart. In the window that opens, tick "Allow Algo Trading" on the Common tab. On the Inputs tab, leave 20 buys and 20 sells for this first run. Click OK. A smiley face in the chart's top-right corner means the EA is active.
+It fires about one second after you attach it, waits 10 seconds, prints the report, and closes its positions. To read the output, open the Toolbox (Ctrl+T) and click the Experts tab. Copy the lines starting at "ASYNC BURST REPORT" and paste them here.
+Remove the EA from the chart straight afterward (right-click the chart > Expert Advisors > Remove). This matters because the EA restarts and fires a fresh burst whenever you change the chart's timeframe, reload it, or restart the terminal. If it does fire again by accident, it will still clean up after itself, but it's better not to rely on that.
+
+For the 55 and 55 run, attach it again the same way and change the two input numbers on the Inputs tab.
+
+If nothing seems to happen, check the Experts tab for errors first. The usual causes are Algo Trading being off (the toolbar button is red), the EA attached to the wrong symbol, or the compile step having silently failed.
