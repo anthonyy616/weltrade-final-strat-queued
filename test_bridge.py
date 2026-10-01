@@ -6,7 +6,8 @@ SYMBOL, MAGIC = "FX Vol 20", 999004
 
 async def main():
     b = EABridge()
-    print("ping:", await b.ping())
+    print("common files folder:", b.resolve_common_files())
+    print("ping (version):", await b.ping())
 
     orders = []
     for i in range(5):
