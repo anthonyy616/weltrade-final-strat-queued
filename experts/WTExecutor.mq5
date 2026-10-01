@@ -1,4 +1,4 @@
-#property version "1.00"
+#property version "1.10"
 #property description "Command-driven async order executor (queued-close bot)"
 
 input int InpPollMs      = 5;     // how often to look for a command file
@@ -7,6 +7,19 @@ input int InpReplyWaitMs = 8000;  // stop waiting for server replies after this
 #define CMD_FILE "wt_cmd.txt"
 #define RES_FILE "wt_res.txt"
 #define RES_TMP  "wt_res.tmp"
+#define WT_EA_VERSION "1.1"
+#define LOG_FILE  "wt_ea.log"
+
+// --- File logger (phase A): every Log() call also lands in <common>\Files\wt_ea.log ---
+void Log(string msg)
+{
+   Print(msg);
+   int h = FileOpen(LOG_FILE, FILE_READ|FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_COMMON|FILE_SHARE_READ|FILE_SHARE_WRITE);
+   if(h == INVALID_HANDLE) return;
+   FileSeek(h, 0, SEEK_END);
+   FileWriteString(h, TimeToString(TimeLocal(), TIME_DATE|TIME_SECONDS) + " " + msg + "\r\n");
+   FileClose(h);
+}
 
 bool   busy = false;
 string cur_id = "", cur_action = "", cur_symbol = "";
@@ -24,9 +37,20 @@ int OnInit()
 {
    FileDelete(CMD_FILE, FILE_COMMON);
    FileDelete(RES_FILE, FILE_COMMON);
+   // Rotate the log if it grew past 5 MB (phase A, item 4)
+   if(FileIsExist(LOG_FILE, FILE_COMMON))
+   {
+      int hrot = FileOpen(LOG_FILE, FILE_READ|FILE_TXT|FILE_ANSI|FILE_COMMON|FILE_SHARE_READ|FILE_SHARE_WRITE);
+      if(hrot != INVALID_HANDLE)
+      {
+         ulong sz = FileSize(hrot);
+         FileClose(hrot);
+         if(sz > 5 * 1024 * 1024) FileDelete(LOG_FILE, FILE_COMMON);
+      }
+   }
    EventSetMillisecondTimer(InpPollMs);
-   Print("WT executor ready. Common files folder: ",
-         TerminalInfoString(TERMINAL_COMMONDATA_PATH), "\\Files");
+   Log("WT executor v" + WT_EA_VERSION + " ready. Common files folder: "
+       + TerminalInfoString(TERMINAL_COMMONDATA_PATH) + "\\Files");
    return INIT_SUCCEEDED;
 }
 
@@ -105,6 +129,10 @@ void RunCommand()
       else if(k == "magic")  cur_magic = StringToInteger(v);
    }
 
+   // Command received: log id/action/symbol and the raw order lines (ASCII only)
+   Log("cmd id=" + cur_id + " action=" + cur_action + " symbol=" + cur_symbol
+       + " lines=" + IntegerToString(n));
+
    if(cur_action == "PING" || cur_symbol == "")
    {
       WriteResult(true);
@@ -114,6 +142,7 @@ void RunCommand()
    MqlTick tk;
    if(!SymbolSelect(cur_symbol, true) || !SymbolInfoTick(cur_symbol, tk))
    {
+      Log("FAIL symbol=" + cur_symbol + " reason=no tick or symbol unavailable");
       failLines += "F|TICK|0\n";
       WriteResult(true);
       return;
@@ -148,6 +177,11 @@ void RunCommand()
    CheckComplete();
 }
 
+void LogFailure(string tag, int retcode)
+{
+   Log("FAIL tag=" + tag + " retcode=" + IntegerToString(retcode));
+}
+
 void SendOpen(string &parts[], const MqlTick &tk, int digits)
 {
    string tag = parts[5];
@@ -170,6 +204,7 @@ void SendOpen(string &parts[], const MqlTick &tk, int digits)
    {
       sentFail++;
       failLines += "F|" + tag + "|" + IntegerToString((int)rs.retcode) + "\n";
+      LogFailure(tag, (int)rs.retcode);
    }
 }
 
@@ -180,6 +215,7 @@ void SendClose(ulong ticket, const MqlTick &tk)
    {
       sentFail++;
       failLines += "F|" + tag + "|-1\n";   // -1 = position not found (already closed?)
+      LogFailure(tag, -1);
       return;
    }
    bool wasBuy = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY);
@@ -200,6 +236,7 @@ void SendClose(ulong ticket, const MqlTick &tk)
    {
       sentFail++;
       failLines += "F|" + tag + "|" + IntegerToString((int)rs.retcode) + "\n";
+      LogFailure(tag, (int)rs.retcode);
    }
 }
 
@@ -219,13 +256,20 @@ void OnTradeTransaction(const MqlTradeTransaction &t,
    {
       repFail++;
       failLines += "F|" + p_tag[idx] + "|" + IntegerToString((int)rs.retcode) + "\n";
+      LogFailure(p_tag[idx], (int)rs.retcode);
    }
 }
 
 void CheckComplete()
 {
    bool all = (repOk + repFail) >= sentOk;
-   if(all || GetTickCount64() >= deadline) WriteResult(all);
+   if(all || GetTickCount64() >= deadline)
+   {
+      if(!all)
+         Log("REPLY TIMEOUT: " + IntegerToString(sentOk - repOk - repFail)
+             + " of " + IntegerToString(sentOk) + " requests unanswered");
+      WriteResult(all);
+   }
 }
 
 void WriteResult(bool complete)
@@ -240,6 +284,7 @@ void WriteResult(bool complete)
    s += "submit_ms=" + DoubleToString((tSubmitEnd - t0) / 1000.0, 2) + "\n";
    s += "first_reply_ms=" + DoubleToString(tFirst > 0 ? (tFirst - t0) / 1000.0 : 0.0, 2) + "\n";
    s += "last_reply_ms=" + DoubleToString(tLast > 0 ? (tLast - t0) / 1000.0 : 0.0, 2) + "\n";
+   s += "version=" + WT_EA_VERSION + "\n";
    s += failLines;
    for(int i = 0; i < p_count; i++)
       if(!p_done[i]) s += "P|" + p_tag[i] + "\n";
@@ -251,5 +296,11 @@ void WriteResult(bool complete)
       FileClose(h);
       FileMove(RES_TMP, FILE_COMMON, RES_FILE, FILE_REWRITE|FILE_COMMON);
    }
+   Log("done id=" + cur_id + " action=" + cur_action
+       + " sent_ok=" + IntegerToString(sentOk)
+       + " replies_ok=" + IntegerToString(repOk)
+       + " replies_fail=" + IntegerToString(repFail)
+       + " submit_ms=" + DoubleToString(tSubmitEnd > t0 ? (tSubmitEnd - t0) / 1000.0 : 0.0, 2)
+       + " last_reply_ms=" + DoubleToString(tLast > 0 ? (tLast - t0) / 1000.0 : 0.0, 2));
    busy = false;
 }
