@@ -20,6 +20,42 @@ load_dotenv()
 logger = logging.getLogger("engine")
 
 
+def init_mt5_connection() -> bool:
+    """Initialize MT5 + login from env (MT5_LOGIN/PASSWORD/SERVER/PATH).
+
+    Extracted from TradingEngine._init_mt5 so other modules (e.g. the EA
+    provisioner) reuse the exact same connection path without duplicating
+    login code. Returns True on success; shuts the API down on failure.
+    """
+    login = int(os.getenv("MT5_LOGIN", 0))
+    password = os.getenv("MT5_PASSWORD", "")
+    server = os.getenv("MT5_SERVER", "")
+    path = os.getenv("MT5_PATH", "")
+    try:
+        # Shutdown any existing connection first
+        mt5.shutdown()
+
+        # Initialize
+        if not mt5.initialize(path=path if path else None):
+            error = mt5.last_error()
+            logger.error(f"MT5 initialize failed: {error}")
+            return False
+
+        # Login
+        if not mt5.login(login, password=password, server=server):
+            error = mt5.last_error()
+            logger.error(f"MT5 login failed: {error}")
+            mt5.shutdown()
+            return False
+
+        logger.info("[OK] MT5 connected successfully")
+        return True
+
+    except Exception as e:
+        logger.error(f"MT5 init exception: {e}")
+        return False
+
+
 class TradingEngine:
     """
     High-performance trading engine with MT5 health monitoring.
@@ -64,29 +100,7 @@ class TradingEngine:
         Initialize MT5 connection with error handling.
         Returns True if successful.
         """
-        try:
-            # Shutdown any existing connection first
-            mt5.shutdown()
-            
-            # Initialize
-            if not mt5.initialize(path=self.path if self.path else None):
-                error = mt5.last_error()
-                logger.error(f"MT5 initialize failed: {error}")
-                return False
-            
-            # Login
-            if not mt5.login(self.login, password=self.password, server=self.server):
-                error = mt5.last_error()
-                logger.error(f"MT5 login failed: {error}")
-                mt5.shutdown()
-                return False
-            
-            logger.info("[OK] MT5 connected successfully")
-            return True
-            
-        except Exception as e:
-            logger.error(f"MT5 init exception: {e}")
-            return False
+        return init_mt5_connection()
 
     async def _reconnect_mt5(self) -> bool:
         """
