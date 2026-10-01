@@ -89,6 +89,9 @@ async def startup_event():
     ea_log_tail = EALogTail(ea_bridge)
     ea_log_tail.start()
 
+    # Give every strategy engine access to the bridge + status (plan E.1)
+    bot_manager.set_ea(ea_bridge, ea_status)
+
     asyncio.create_task(trading_engine.start())
 
 

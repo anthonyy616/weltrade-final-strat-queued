@@ -60,7 +60,17 @@ class StrategyOrchestrator:
             if sym_config:
                 print(f"[ORCHESTRATOR] Spawning Strategy: {sym}")
                 strategy = QCStrategy(self.config_manager, sym, self.user_id, session_logger=self.session_logger)
+                self._attach_ea(strategy)
                 self.strategies[sym] = strategy
+
+    def _attach_ea(self, strategy):
+        """Give a new strategy the shared EA bridge/status (plan phase E).
+        Reads the class-level BotManager handle — no import cycle."""
+        from core.bot_manager import BotManager   # local import: avoid cycle
+        holder = getattr(BotManager, "_last_instance", None)
+        if holder is not None and holder.ea_bridge is not None:
+            strategy.ea_bridge = holder.ea_bridge
+            strategy.ea_status = holder.ea_status
 
         self.active_symbols = enabled_symbols
 
@@ -97,6 +107,7 @@ class StrategyOrchestrator:
                 self.active_symbols.add(symbol)
         
         if symbol in self.strategies:
+            self._attach_ea(self.strategies[symbol])
             self.session_logger.log_button(f"Start {symbol}")
             await self.strategies[symbol].start()
 

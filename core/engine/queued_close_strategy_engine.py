@@ -20,6 +20,17 @@ from core.persistence.repository import Repository
 logger = logging.getLogger("queued_close")
 mt5: Any = mt5_module
 
+# Bulk-order path (plan phase E): available = None means "not provisioned yet"
+# (sequential fallback); otherwise the server's ea_status dict is consulted at
+# cycle start and again at batch time via bridge.healthy().
+try:
+    from core import bulk_orders
+    from core.ea_bridge import EABridge
+    _bulk_available = True
+except Exception as _e:   # pragma: no cover
+    logger.warning(f"bulk order path unavailable: {_e}")
+    _bulk_available = False
+
 # ---------------------------------------------------------------------------
 # Pure closing-target math (agent/02 §6). Raw price units — pip values are
 # added to prices directly, matching the existing fork's convention.
@@ -186,6 +197,11 @@ class QueuedCloseStrategyEngine:
         self.activity_log = ActivityLogger(symbol, user_id, session_logger)
         self.repository: Optional[Repository] = None
 
+        # EA bulk-open support (plan phase E). Both are injected by the server
+        # at startup; if absent, the engine always uses the sequential path.
+        self.ea_bridge = None
+        self.ea_status: Optional[dict] = None
+
     # ------------------------------------------------------------------
     # Accessors
     # ------------------------------------------------------------------
@@ -326,6 +342,14 @@ class QueuedCloseStrategyEngine:
 
         moving_leg = "MovingBuy" if self.state.moving_side == "buy" else "MovingSell"
         constant_leg = "ConstantBuy" if self.state.moving_side == "sell" else "ConstantSell"
+
+        # --- Try the EA bulk path first (plan E.2/E.4); the sequential loop
+        # below is the untouched fallback, selected when EA status is
+        # unavailable or healthy() fails at cycle start. ---
+        if await self._try_bulk_open(moving_leg, constant_leg):
+            self.state.phase = "ACTIVE"
+            await self._save_symbol_state()
+            return
 
         # Open all moving-side positions, each with its TP/SL slot (1-based, no
         # two positions share a slot).
@@ -487,12 +511,136 @@ class QueuedCloseStrategyEngine:
         result = mt5.order_send(request)
         return result is not None and result.retcode == mt5.TRADE_RETCODE_DONE
 
+    # ------------------------------------------------------------------
+    # EA bulk path (plan phase E) — additive; the sequential path remains
+    # the fallback and the final verifier.
+    # ------------------------------------------------------------------
+
+    async def _try_bulk_open(self, moving_leg: str, constant_leg: str) -> bool:
+        """Open the whole pool through the EA in one batch. Returns True when
+        the cycle start was handled via the EA path (success OR hard abort);
+        False to use the sequential fallback."""
+        if not _bulk_available or self.ea_bridge is None or self.ea_status is None:
+            return False
+        if not self.ea_status.get("available"):
+            self.activity_log.log_info(
+                f"EA unavailable: {self.ea_status.get('reason')} "
+                "(sequential fallback active)")
+            return False
+
+        try:
+            orders = bulk_orders.build_order_lines(
+                self.mt5_symbol, self.state.moving_side,
+                self.state.moving_lot, self.state.constant_lot,
+                self.state.moving_total, self.state.constant_total,
+                moving_tp_level, moving_sl_level,
+                self.state.grid_level_up, self.state.grid_level_down,
+                self.state.moving_freq)
+        except ValueError as e:
+            # Preflight-grade config error: fail the cycle loudly, open nothing
+            self.activity_log.log_error(f"Bulk open preflight failed: {e}")
+            self.state.phase = "IDLE"
+            self.running = False
+            return True
+
+        try:
+            tickets = await bulk_orders.open_position_batch(
+                self.ea_bridge, self.mt5_symbol, orders)
+        except bulk_orders.UseSequentialFallback as e:
+            self.activity_log.log_error(
+                f"EA not answering at cycle start ({e}) — sequential fallback")
+            return False
+        except bulk_orders.BulkOpenAborted as e:
+            # Plan section 1: cycle failed — mark it, do not start it
+            self.activity_log.log_error(f"BULK OPEN ABORTED: {e}")
+            self.state.phase = "IDLE"
+            self.running = False
+            return True
+
+        # Feed the tag -> (ticket, entry) map into the existing tracking (plan
+        # E.2g: reuse the engine's state, no new state invented).
+        constant_side = "sell" if self.state.moving_side == "buy" else "buy"
+        repo = await self._ensure_repository_async()
+        for tag, (ticket, entry) in tickets.items():
+            order = next(o for o in orders if o["tag"] == tag)
+            if order["kind"] == "moving":
+                if order["slot"] in [r.slot_index for r in
+                                     self.state.moving_positions.values()]:
+                    continue   # split part already recorded for this slot
+                tp = moving_tp_level(self.state.grid_level_up,
+                                     self.state.grid_level_down,
+                                     order["slot"], self.state.moving_freq,
+                                     self.state.moving_side)
+                sl = moving_sl_level(self.state.grid_level_up,
+                                     self.state.grid_level_down,
+                                     order["slot"], self.state.moving_freq,
+                                     self.state.moving_side)
+                self.state.moving_positions[ticket] = MovingPositionRecord(
+                    ticket=ticket, entry=entry, tp_price=tp, sl_price=sl,
+                    direction=self.state.moving_side,
+                    slot_index=order["slot"], lot=order["lot"])
+                await repo.save_moving_position(
+                    ticket, self.state.cycle_count, entry, tp, sl,
+                    self.state.moving_side, order["slot"], closed=False)
+                self.activity_log.log_fire(
+                    self.state.cycle_count, moving_leg, entry, order["lot"],
+                    tp, sl, ticket)
+            else:
+                if ticket not in self.state.constant_tickets:
+                    self.state.constant_tickets.append(ticket)
+                    await repo.save_constant_ticket(ticket, self.state.cycle_count)
+                    self.activity_log.log_fire(
+                        self.state.cycle_count, constant_leg, entry,
+                        order["lot"], 0.0, 0.0, ticket)
+        self.activity_log.log_info(
+            f"EA bulk open: {len(tickets)} positions opened in one batch")
+        return True
+
+    async def _ea_close_tickets(self, tickets: List[int]) -> bool:
+        """Close 3+ tickets through the EA (plan E.3); False if the EA is
+        not usable so the caller keeps the sequential path."""
+        if not _bulk_available or self.ea_bridge is None or self.ea_status is None:
+            return False
+        if not self.ea_status.get("available"):
+            return False
+        if not await self.ea_bridge.healthy():
+            return False
+        try:
+            res = await self.ea_bridge.close_tickets(
+                self.mt5_symbol, self.MAGIC_NUMBER, tickets)
+        except Exception as e:
+            self.activity_log.log_error(f"EA close_tickets failed: {e}")
+            return False
+        # Always verify with positions_get afterwards (plan E.3)
+        await asyncio.sleep(0.3)
+        positions = mt5.positions_get(symbol=self.mt5_symbol) or []
+        live = set(p.ticket for p in positions)
+        closed = [t for t in tickets if t not in live]
+        if len(closed) < len(tickets):
+            self.activity_log.log_error(
+                f"EA close verified {len(closed)}/{len(tickets)} "
+                "— stragglers left for the sequential pass")
+            return False
+        return True
+
     async def _force_close_everything(self):
         """Close every open strategy position on this symbol immediately
-        (cycle-end remainder, terminate-all, exhausted-queue reset)."""
+        (cycle-end remainder, terminate-all, exhausted-queue reset).
+        3+ positions go through the EA bulk close when available (plan E.3);
+        one or two keep direct order_send. The sequential loop remains the
+        verification/fallback pass — the orchestrator's nuclear fallback is
+        untouched."""
         positions = mt5.positions_get(symbol=self.mt5_symbol) or []
-        closed = 0
-        for pos in positions:
+        mine = [pos.ticket for pos in positions if pos.magic == self.MAGIC_NUMBER]
+        ea_closed = 0
+        if len(mine) >= 3:
+            if await self._ea_close_tickets(mine):
+                positions = mt5.positions_get(symbol=self.mt5_symbol) or []
+                live = set(p.ticket for p in positions)
+                ea_closed = len(mine) - len([t for t in mine if t in live])
+                mine = [t for t in mine if t in live]
+        closed = ea_closed
+        for pos in mt5.positions_get(symbol=self.mt5_symbol) or []:
             if pos.magic != self.MAGIC_NUMBER:
                 continue
             if self._close_position(pos.ticket):

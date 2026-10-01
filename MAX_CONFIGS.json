@@ -1,0 +1,40 @@
+{
+    "maxConfigs": {
+        "MAX_LOT_PER_ASSET": {
+            "FX Vol 20": 7,
+            "FX Vol 40": 4,
+            "FX Vol 60": 5,
+            "FX Vol 80": 1,
+            "FX Vol 99": 4,
+            "SFX Vol 20": 5,
+            "SFX Vol 40": 1,
+            "SFX Vol 60": 1,
+            "SFX Vol 80": 2,
+            "SFX Vol 99": 2
+        },
+        "MAX_VOLUME_PER_ASSET": {
+            "FX Vol 20": 12,
+            "FX Vol 40": 4,
+            "FX Vol 60": 15,
+            "FX Vol 80": 6,
+            "FX Vol 99": 8,
+            "SFX Vol 20": 25,
+            "SFX Vol 40": 4,
+            "SFX Vol 60": 1,
+            "SFX Vol 80": 4,
+            "SFX Vol 99": 73
+        }, 
+        "MIN_STOP_PIPS_PER_ASSET": {
+            "FX Vol 20": 11,
+            "FX Vol 40": 27,
+            "FX Vol 60": 19,
+            "FX Vol 80": 34,
+            "FX Vol 99": 42,
+            "SFX Vol 20": 21,
+            "SFX Vol 40": 74,
+            "SFX Vol 60": 59,
+            "SFX Vol 80": 86,
+            "SFX Vol 99": 18
+        }
+    }
+}
