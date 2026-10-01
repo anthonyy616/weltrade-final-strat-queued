@@ -22,6 +22,16 @@ except ImportError:  # pragma: no cover - deployment dependency fallback
 
 load_dotenv()
 
+# --- EA bridge / provisioner / log tail (plan phases C–E) ---
+from core.ea_bridge import EABridge
+from core.ea_provisioner import ensure_ea_ready
+from core.ea_log_tail import EALogTail
+
+# Shared EA status; the strategy reads this to pick bulk vs sequential.
+ea_bridge = EABridge()
+ea_status = {"available": False, "version": None, "reason": "not provisioned yet"}
+
+
 # --- FRESH SESSION: Clean stale DB on boot ---
 DB_PATH = "db/grid_v3.db"
 if os.path.exists(DB_PATH):
@@ -58,6 +68,27 @@ trading_engine = TradingEngine(bot_manager)
 @app.on_event("startup")
 async def startup_event():
     print("[SERVER] Starting: Launching Monolith Engine...")
+
+    # Provision the EA BEFORE the trading engine starts (plan E.1). A stale
+    # ini holding the password is deleted by the provisioner itself; the log
+    # tail never prints credentials — it only reads the EA's own wt_ea.log.
+    allow_restart = os.getenv("EA_AUTO_RESTART", "true").lower() != "false"
+    try:
+        status = await ensure_ea_ready(ea_bridge, allow_restart=allow_restart)
+        ea_status["available"] = status.available
+        ea_status["version"] = status.version
+        ea_status["reason"] = status.reason
+        if status.available:
+            print(f"[SERVER] EA ready v{status.version}")
+        else:
+            print(f"[SERVER] EA unavailable: {status.reason} (sequential fallback active)")
+    except Exception as e:
+        ea_status["reason"] = f"provisioning error: {e}"
+        print(f"[SERVER] EA unavailable: {e} (sequential fallback active)")
+
+    ea_log_tail = EALogTail(ea_bridge)
+    ea_log_tail.start()
+
     asyncio.create_task(trading_engine.start())
 
 
