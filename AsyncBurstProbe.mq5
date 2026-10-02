@@ -1,7 +1,7 @@
 #property strict
 input string InpSymbol  = "FX Vol 20";
-input int    InpBuys    = 20;
-input int    InpSells   = 20;
+input int    InpBuys    = 150;
+input int    InpSells   = 150;
 input double InpLot     = 0.01;
 input long   InpMagic   = 999003;
 input int    InpWaitSec = 10;
