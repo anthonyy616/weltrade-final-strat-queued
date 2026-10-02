@@ -32,14 +32,12 @@ ea_bridge = EABridge()
 ea_status = {"available": False, "version": None, "reason": "not provisioned yet"}
 
 
-# --- FRESH SESSION: Clean stale DB on boot ---
+# --- Persistence ---
+# The DB is NOT wiped on boot: it holds the state crash recovery reconciles
+# against (open tickets, queue, cycle counters). Deleting it here made
+# reconcile_on_startup a no-op and left live positions unmanaged after a
+# restart. A deliberate reset is /control/terminate-all only.
 DB_PATH = "db/grid_v3.db"
-if os.path.exists(DB_PATH):
-    try:
-        os.remove(DB_PATH)
-        print(f"[STARTUP] Cleaned stale DB: {DB_PATH}")
-    except Exception as e:
-        print(f"[STARTUP] Could not clean DB (may be locked): {e}")
 
 app = FastAPI()
 
@@ -150,17 +148,13 @@ async def get_current_bot(request: Request):
     Each user gets their own isolated bot instance.
     """
     auth_header = request.headers.get('Authorization')
-    if not auth_header: 
-        # [DEBUG] Allow debug token for testing without Supabase
-        # raise HTTPException(401, "Missing token")
-        print("[AUTH] No token provided, defaulting to debug user due to testing environment.")
-        return await bot_manager.get_or_create_bot("92b17ba5-59c0-48c2-85fb-d78f9a38655c")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(401, "Missing token")
 
-    if auth_header == "Bearer DEBUG":
-         return await bot_manager.get_or_create_bot("92b17ba5-59c0-48c2-85fb-d78f9a38655c")
-    
     try:
-        token = auth_header.split(" ")[1]
+        token = auth_header.split(" ", 1)[1]
+        if not token:
+            raise ValueError("empty bearer token")
         user = await asyncio.to_thread(verify_token_sync, token)
     except Exception as e:
         print(f"[AUTH] Check Failed: {e}")

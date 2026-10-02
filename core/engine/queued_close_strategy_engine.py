@@ -31,6 +31,23 @@ except Exception as _e:   # pragma: no cover
     logger.warning(f"bulk order path unavailable: {_e}")
     _bulk_available = False
 
+# Per-order lot cap, shared with the bulk path so the sequential fallback
+# enforces the same limit the EA path does.
+MAX_LOT_PER_ASSET = getattr(bulk_orders, "MAX_LOT_PER_ASSET", {}) if _bulk_available else {}
+
+
+def _split_lot(lot: float, max_lot: float) -> List[float]:
+    """Split a lot into chunks not exceeding the per-order cap (up to 20)."""
+    if lot <= max_lot:
+        return [float(lot)]
+    chunks: List[float] = []
+    remaining = float(lot)
+    while remaining > 1e-9 and len(chunks) < 20:
+        chunk = min(remaining, float(max_lot))
+        chunks.append(chunk)
+        remaining -= chunk
+    return chunks
+
 # ---------------------------------------------------------------------------
 # Pure closing-target math (agent/02 §6). Raw price units — pip values are
 # added to prices directly, matching the existing fork's convention.
@@ -202,6 +219,10 @@ class QueuedCloseStrategyEngine:
         self.ea_bridge = None
         self.ea_status: Optional[dict] = None
 
+        # Set by reconcile_on_startup when a live cycle was recovered from
+        # disk. start() resumes that cycle instead of opening a second pool.
+        self.recovered = False
+
     # ------------------------------------------------------------------
     # Accessors
     # ------------------------------------------------------------------
@@ -240,11 +261,28 @@ class QueuedCloseStrategyEngine:
 
     async def start(self):
         """Open the full pool and enter ACTIVE phase. Config values are
-        snapshotted exactly once here; nothing downstream re-reads them."""
+        snapshotted exactly once here; nothing downstream re-reads them.
+
+        If startup reconciliation already recovered a live cycle for this
+        symbol, this is a no-op: the recovered cycle is already running and
+        its config snapshot came from the DB, not from the live config. Only
+        a genuinely fresh start reads config and opens a pool.
+        """
         if self.running:
             return
 
         await self._ensure_repository_async()
+
+        if self.recovered and self.state.phase == "ACTIVE":
+            self.running = True
+            self.graceful_stop = False
+            self.activity_log.log_info(
+                f"Resuming recovered cycle #{self.state.cycle_count} "
+                f"({len(self.state.moving_positions)} moving / "
+                f"{len(self.state.constant_tickets)} constant open) "
+                "— no new pool opened"
+            )
+            return
 
         cfg = self.config
         # --- Config snapshot: the ONLY place these are read from config ---
@@ -352,47 +390,52 @@ class QueuedCloseStrategyEngine:
             return
 
         # Open all moving-side positions, each with its TP/SL slot (1-based, no
-        # two positions share a slot).
+        # two positions share a slot). Lots above MAX_LOT_PER_ASSET are split
+        # into several orders carrying the SAME slot level; the first ticket
+        # owns the slot (mirrors the EA bulk path's slot bookkeeping).
+        max_lot = MAX_LOT_PER_ASSET.get(self.mt5_symbol, 100)
         for n in range(1, self.state.moving_total + 1):
             tp = moving_tp_level(self.state.grid_level_up, self.state.grid_level_down,
                                  n, self.state.moving_freq, self.state.moving_side)
             sl = moving_sl_level(self.state.grid_level_up, self.state.grid_level_down,
                                  n, self.state.moving_freq, self.state.moving_side)
-            ticket, entry = await self._open_market_order(
-                self.state.moving_side, self.state.moving_lot, moving_leg,
-                tp_price=tp, sl_price=sl)
-            if not ticket:
-                self.activity_log.log_error(
-                    f"Moving slot {n}: order failed — pool opened partially")
-                continue
-            self.state.moving_positions[ticket] = MovingPositionRecord(
-                ticket=ticket, entry=entry, tp_price=tp, sl_price=sl,
-                direction=self.state.moving_side, slot_index=n,
-                lot=self.state.moving_lot)
-            await repo.save_moving_position(
-                ticket, self.state.cycle_count, entry, tp, sl,
-                self.state.moving_side, n, closed=False)
-            self.activity_log.log_fire(
-                self.state.cycle_count, moving_leg, entry, self.state.moving_lot,
-                tp, sl, ticket)
+            for chunk in _split_lot(self.state.moving_lot, max_lot):
+                ticket, entry = await self._open_market_order(
+                    self.state.moving_side, chunk, moving_leg,
+                    tp_price=tp, sl_price=sl)
+                if not ticket:
+                    self.activity_log.log_error(
+                        f"Moving slot {n}: order failed — pool opened partially")
+                    continue
+                self.state.moving_positions[ticket] = MovingPositionRecord(
+                    ticket=ticket, entry=entry, tp_price=tp, sl_price=sl,
+                    direction=self.state.moving_side, slot_index=n,
+                    lot=chunk)
+                await repo.save_moving_position(
+                    ticket, self.state.cycle_count, entry, tp, sl,
+                    self.state.moving_side, n, closed=False)
+                self.activity_log.log_fire(
+                    self.state.cycle_count, moving_leg, entry, chunk,
+                    tp, sl, ticket)
 
         # Open all constant-side positions with NO TP/SL whatsoever. The
         # order request below deliberately never carries sl/tp fields for
         # these — do not "helpfully" add default stops here (agent/04).
         constant_side = "sell" if self.state.moving_side == "buy" else "buy"
         for _ in range(self.state.constant_total):
-            ticket, entry = await self._open_market_order(
-                constant_side, self.state.constant_lot, constant_leg,
-                tp_price=None, sl_price=None)
-            if not ticket:
-                self.activity_log.log_error(
-                    "Constant position order failed — pool opened partially")
-                continue
-            self.state.constant_tickets.append(ticket)
-            await repo.save_constant_ticket(ticket, self.state.cycle_count)
-            self.activity_log.log_fire(
-                self.state.cycle_count, constant_leg, entry,
-                self.state.constant_lot, 0.0, 0.0, ticket)
+            for chunk in _split_lot(self.state.constant_lot, max_lot):
+                ticket, entry = await self._open_market_order(
+                    constant_side, chunk, constant_leg,
+                    tp_price=None, sl_price=None)
+                if not ticket:
+                    self.activity_log.log_error(
+                        "Constant position order failed — pool opened partially")
+                    continue
+                self.state.constant_tickets.append(ticket)
+                await repo.save_constant_ticket(ticket, self.state.cycle_count)
+                self.activity_log.log_fire(
+                    self.state.cycle_count, constant_leg, entry,
+                    chunk, 0.0, 0.0, ticket)
 
         self.state.phase = "ACTIVE"
         await self._save_symbol_state()
@@ -454,9 +497,15 @@ class QueuedCloseStrategyEngine:
             self.activity_log.log_error(f"{leg_name} order failed: {mt5.last_error()}")
             return 0, 0.0
         if result.retcode != mt5.TRADE_RETCODE_DONE:
-            self.activity_log.log_error(
-                f"{leg_name} order failed: {result.comment if result else 'unknown'}")
-            return 0, 0.0
+            invalid_stops = getattr(mt5, "TRADE_RETCODE_INVALID_STOPS", 10016)
+            if result.retcode == invalid_stops and tp_price is not None:
+                result = self._retry_on_invalid_stops(request, direction, leg_name)
+                if result is None:
+                    return 0, 0.0
+            else:
+                self.activity_log.log_error(
+                    f"{leg_name} order failed: {result.comment if result else 'unknown'}")
+                return 0, 0.0
 
         # Position-confirmation pause (existing codebase pattern)
         await asyncio.sleep(0.1)
@@ -477,6 +526,39 @@ class QueuedCloseStrategyEngine:
                         actual_entry = pos.price_open
                         break
         return actual_ticket, actual_entry
+
+    def _retry_on_invalid_stops(self, request: dict, direction: str, leg_name: str):
+        """Retry an order the broker rejected for invalid stops.
+
+        Unlike the legacy grid-bounce engine, this does NOT substitute a generic
+        pip-distance stop: in this strategy the TP/SL levels ARE the closing
+        targets, so rewriting them would silently corrupt the cycle's target
+        math. Instead we re-send the SAME levels against a fresh tick — the
+        usual cause is price moving between level computation and send.
+        Returns the successful result, or None if it still fails.
+        """
+        sym = self.mt5_symbol
+        fresh = mt5.symbol_info_tick(sym)
+        if fresh is None:
+            self.activity_log.log_error(
+                f"{leg_name}: invalid stops and no fresh tick available for retry")
+            return None
+
+        retry = dict(request)
+        retry["price"] = float(fresh.ask if direction == "buy" else fresh.bid)
+        res = mt5.order_send(retry)
+        if res is not None and res.retcode == mt5.TRADE_RETCODE_DONE:
+            self.activity_log.log_info(
+                f"{leg_name}: retried at a fresh tick and filled "
+                f"({retry['price']}); TP/SL unchanged")
+            return res
+
+        # Second failure: surface the real rejection so the operator can widen
+        # grid_distance or lower moving_freq rather than guess.
+        err = res.comment if res is not None else mt5.last_error()
+        self.activity_log.log_error(
+            f"{leg_name} order failed on invalid-stops retry: {err}")
+        return None
 
     def _close_position(self, ticket: int) -> bool:
         """Close a single MT5 position at market. Returns success."""
@@ -798,7 +880,6 @@ class QueuedCloseStrategyEngine:
             check = bid if rec.direction == "buy" else ask
             is_tp = abs(check - rec.tp_price) <= abs(check - rec.sl_price)
             close_price = rec.tp_price if is_tp else rec.sl_price
-        close_price = rec.tp_price if is_tp else rec.sl_price
         if rec.direction == "buy":
             realized = (close_price - rec.entry) * rec.lot
         else:
@@ -1009,10 +1090,24 @@ class QueuedCloseStrategyEngine:
         """Diff live MT5 positions against DB state, replay every closure that
         happened while disconnected through the SAME handler a live tick uses,
         then resume. Runs under execution_lock with catching_up held True for
-        the entire pass (agent/05: no live tick may interleave mid-replay)."""
+        the entire pass (agent/05: no live tick may interleave mid-replay).
+
+        On success the engine is left RUNNING so the recovered positions are
+        actually managed again — rebuilding state without going live would
+        leave every open position unmanaged and silently bleeding.
+        """
         await self._ensure_repository_async()
 
-        summary = {"replayed": [], "orphans": [], "cycle_restarted": False}
+        summary = {"replayed": [], "orphans": [], "stale_constant_tickets": [],
+                   "cycle_restarted": False, "resumed": False}
+
+        # Seed last-known prices from a live tick BEFORE replay: closure
+        # direction is inferred from them when deal history is unavailable, and
+        # at startup they would still be 0.0 (which picks the wrong side).
+        tick = mt5.symbol_info_tick(self.mt5_symbol)
+        if tick:
+            self._last_ask = tick.ask
+            self._last_bid = tick.bid
 
         async with self.execution_lock:
             self.state.catching_up = True
@@ -1020,6 +1115,7 @@ class QueuedCloseStrategyEngine:
                 state_row = await self.repository.get_state()
                 if state_row and state_row.get("phase") in ("ACTIVE", "RESETTING"):
                     await self._rebuild_state_from_db(state_row)
+                    await self._verify_constant_tickets(summary)
                     await self._replay_missed_closures(summary)
                 else:
                     # No active cycle persisted — clean slate
@@ -1028,6 +1124,19 @@ class QueuedCloseStrategyEngine:
                     return summary
             finally:
                 self.state.catching_up = False
+
+        # A RESETTING row means the process died mid-cycle-end. Positions may
+        # still be open; resume into ACTIVE so the normal tick path drains them
+        # rather than leaving a half-dead cycle.
+        if self.state.phase == "RESETTING":
+            self.state.phase = "ACTIVE"
+
+        if (self.state.moving_positions or self.state.constant_tickets
+                or self.state.close_queue):
+            self.recovered = True
+            self.running = True
+            self.graceful_stop = False
+            summary["resumed"] = True
 
         self.activity_log.log_info(f"[RECOVERY] {summary}")
         return summary
@@ -1090,6 +1199,35 @@ class QueuedCloseStrategyEngine:
                     target=target, enqueued_at=float(row["enqueued_at"] or 0.0),
                     retry_count=int(row["retry_count"] or 0)))
 
+    async def _verify_constant_tickets(self, summary: dict):
+        """Drop stored constant tickets that are no longer open at the broker.
+
+        A constant position can be closed by the user (or by the broker) while
+        the bot is down. The DB row survives, so the engine would later try to
+        close a ticket that no longer exists, fail, and — if it is the last
+        pending queue item — hit the terminate-all-and-restart-cycle path for
+        no reason. Positions_get is the source of truth: keep only the tickets
+        that are genuinely still open.
+        """
+        stored = list(self.state.constant_tickets)
+        if not stored:
+            return
+
+        positions = mt5.positions_get(symbol=self.mt5_symbol) or []
+        live = {p.ticket for p in positions if p.magic == self.MAGIC_NUMBER}
+
+        stale = [t for t in stored if t not in live]
+        if not stale:
+            return
+
+        self.state.constant_tickets = [t for t in stored if t in live]
+        for ticket in stale:
+            await self.repository.delete_constant_ticket(ticket)
+        summary["stale_constant_tickets"] = stale
+        self.activity_log.log_info(
+            f"[RECOVERY] Dropped {len(stale)} constant ticket(s) no longer open "
+            f"at the broker: {stale}")
+
     async def _replay_missed_closures(self, summary: dict):
         """Find DB-tracked open tickets missing from MT5, pull their deal
         history, and replay each closure through _handle_moving_closure — the
@@ -1099,6 +1237,18 @@ class QueuedCloseStrategyEngine:
 
         tracked_open = set(self.state.moving_positions.keys())
         missing = tracked_open - live_tickets
+
+        # Live positions with our magic that the DB never recorded (crash
+        # between the broker fill and the DB write). Report them rather than
+        # adopting them: their slot index is unknowable, so guessing one would
+        # release the wrong constant target later.
+        orphans = sorted(t for t in live_tickets - tracked_open
+                         if t not in set(self.state.constant_tickets))
+        if orphans:
+            summary["orphans"] = orphans
+            self.activity_log.log_info(
+                f"[RECOVERY] {len(orphans)} live position(s) not tracked by this "
+                f"strategy — left unmanaged, close manually if unwanted: {orphans}")
 
         for ticket in sorted(missing):
             rec = self.state.moving_positions.get(ticket)

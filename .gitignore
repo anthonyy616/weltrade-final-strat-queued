@@ -19,6 +19,9 @@ logs/
 .freebuff/*
 .DS_Store
 
+# Per-user generated config files (written by ConfigManager at runtime)
+config_*.json
+
 
 personal/
 agent/
