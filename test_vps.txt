@@ -1,0 +1,51 @@
+Testing on the VPS (demo account, small lots)
+
+In the VS Code terminal, run git fetch origin, git checkout limit-triggers, git pull, then pip install -r requirements.txt. Apply fix 1 first.
+
+Open MT5 and log into the Weltrade demo. Turn Algo Trading on, with the toolbar button green and "Allow algorithmic trading" ticked in Tools > Options > Expert Advisors. 
+
+In Trade > Positions and Orders, close or remove anything left over. Then press F4, open WTExecutor.mq5 and press F7. You need 0 errors.
+
+Run python tools/ea_doctor.py. It should report the EA at v1.3 and answer a ping. The bot normally installs and attaches the EA itself, and it only restarts MT5 when there are no open positions.
+
+Run python main.py. Look for the EA ready line and the server starting. Open the page and log in.
+
+Burst baseline: pick FX Vol 20 and use 0.01 lots with about 5 buys and 5 sells in Burst mode. Press Start and confirm all positions open. 
+Then press Terminate All and confirm the Positions and Orders tabs are empty. Check that a row landed in logs/users/<id>/sessions/open_quality.csv.
+
+Limit happy path: set Open Mode to LIMIT TRIGGER with the same counts. Leave Entry Offset at the default. 
+The effective offset is clamped up to a floor of at least 11 plus the spread on FX Vol 20, and the log says so if it moved. 
+Press Start. Bot State should read "Armed - waiting for trigger", and the Orders tab should show 5 buy limits below and 5 sell limits above. When price touches one side:
+    the other ladder disappears at once;
+    the opposite side opens at market;
+    the positions sit at roughly one price;
+    the activity log shows [LIMIT] lines for plan, preflight, armed, triggered, done and reconcile.
+
+
+Run it until you see both a lower and an upper trigger.
+
+Never touched: use a wide offset and a small Armed Timeout. It should cancel and re-arm around the new price, with the old pendings gone from the Orders tab.
+
+Stop and terminate while armed: press Stop All while armed, then repeat with Terminate All. Both should leave zero pendings and zero positions.
+
+Python crash while armed: while it is armed, hard-kill Python with Ctrl+C or by closing the terminal. The pendings stay on the broker.
+
+Restart python main.py, and they should be swept and the state idle.
+
+EA restart while armed: while armed, remove the EA from the chart and re-add it. The startup cleanup should clear the pendings.
+
+Race and failure tests: open the EA inputs (Navigator, or right-click the chart > Expert Advisors > Properties > Inputs). 
+
+Set TestCancelDelayMs to something like 300, use the tightest offset on FX Vol 99, and run until you see BOTH_SIDED. Expect flatten and restart with nothing left open. Then set it back to 0. 
+
+Next set TestUnfillableWinner to true and expect WINNER_SHORT with flatten and restart. Leave it on and the circuit breaker should stop the symbol after 3 failures with a clear message. 
+
+Turn both test inputs back off.
+
+Two symbols at once: run FX Vol 20 and FX Vol 40 together in limit mode. Both should arm, trigger and open independently.
+
+Comparison: run about 30 cycles in each mode and compare open_quality.csv. The columns to compare are distinct fill prices, modal share and first-to-last fill span.
+
+Scale up: only after steps 5 to 13 pass, move to your real counts. Pending orders count toward the per-direction volume limit, and preflight checks the account-wide pending cap. 
+
+If either refuses, that is the expected loud failure.

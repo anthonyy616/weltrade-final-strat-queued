@@ -1,6 +1,6 @@
 """Background tail of the EA's log file (plan phase D).
 
-Reads new bytes of <common>\Files\wt_ea.log from a saved offset every 0.5 s
+Reads new bytes of <common>/Files/wt_ea.log from a saved offset every 0.5 s
 and re-emits each line through logging.getLogger("ea") so EA output shows in
 the VS Code terminal and logs/bot.log.
 """

@@ -30,7 +30,7 @@ class EABridge:
         self.cmd = None            # type: Path | None
         self.tmp = None            # type: Path | None
         self.res = None            # type: Path | None
-        self.log_file = None       # type: Path | None  (EA-side wt_ea.log)
+        self.log_file = None       # type: Path | None  #EA-side wt_ea.log
         self._lock = asyncio.Lock()   # the EA handles one command at a time
 
     def resolve_common_files(self) -> Path:
