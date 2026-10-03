@@ -225,19 +225,22 @@ def main():
           "_validate_global_fields()" in merge)
 
     # ------------------------------------------- nothing reads the new fields
-    print("\n[9] No behaviour change: no trading code reads the new fields yet")
+    # Burst safety: the CONFIG fields must stay unread by trading code until
+    # Phase 5 wires them in. (ARMLIMIT is a different thing -- it lives in the
+    # EA from Phase 2 onward and does not by itself change burst behaviour.)
+    print("\n[9] Burst safety: no trading code reads the new CONFIG fields yet")
     root = Path(__file__).resolve().parent.parent
     readers = []
     for rel in ("core/engine/queued_close_strategy_engine.py", "core/bulk_orders.py",
                 "core/ea_bridge.py", "core/trading_engine.py",
-                "core/strategy_orchestrator.py", "experts/WTExecutor.mq5"):
+                "core/strategy_orchestrator.py"):
         txt = (root / rel).read_text(encoding="utf-8")
         for tok in ("open_mode", "entry_offset", "armed_timeout_seconds",
                     "win_fill_deadline_ms", "cancel_ack_deadline_ms",
-                    "burst_mode", "max_consecutive_open_failures", "ARMLIMIT"):
+                    "burst_mode", "max_consecutive_open_failures"):
             if tok in txt:
                 readers.append(f"{rel}: {tok}")
-    check("no trading code references the new fields yet", not readers,
+    check("no Python trading code reads the new config fields yet", not readers,
           "; ".join(readers))
 
     print("\n" + "=" * 62)

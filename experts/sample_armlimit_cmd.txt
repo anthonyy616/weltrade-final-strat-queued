@@ -1,0 +1,11 @@
+id=armtest1
+action=ARMLIMIT
+symbol=FX Vol 20
+magic=123456
+lower=0.00
+upper=0.00
+armed_timeout_ms=30000
+PB|1|0.01|0.00|0.00|armtPB001
+PB|2|0.01|0.00|0.00|armtPB002
+PS|1|0.01|0.00|0.00|armtPS001
+PS|2|0.01|0.00|0.00|armtPS002
