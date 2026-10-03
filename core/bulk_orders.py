@@ -56,6 +56,12 @@ class UseSequentialFallback(RuntimeError):
     """Signal for the strategy: use the existing sequential path this cycle."""
 
 
+class LimitPreflightError(ValueError):
+    """Preflight refused to arm the limit-trigger ladder (doc 08 section 5).
+    Carries a specific message naming the offending value -- no silent
+    fallback to burst mode."""
+
+
 def _split_lot(lot: float, max_lot: float) -> List[float]:
     """Split a lot into chunks not exceeding max_lot."""
     if lot <= max_lot:
@@ -275,6 +281,233 @@ async def open_position_batch(bridge, symbol: str,
             f"batch closed, cycle not started")
 
     return tickets
+
+
+# ===========================================================================
+# Limit-trigger plan builder (doc 08 sections 5 and 8)
+#
+# Pure arithmetic: takes the config snapshot and a mid price, and produces both
+# ladders and both contingent bursts. It never talks to the broker, so it can
+# be eyeballed offline (tools/plan_check.py).
+# ===========================================================================
+
+# Which side of each ladder carries TP/SL follows the moving/constant setting,
+# NOT which side triggered (doc 08 section 8 worked example).
+def _carries_stops(role: str, moving_side: str) -> bool:
+    """True when this role's orders are the MOVING side and must carry TP/SL."""
+    if role in ("PB", "CB"):        # buy-side lines
+        return moving_side == "buy"
+    return moving_side == "sell"    # PS / CS are sell-side lines
+
+
+def _scenario_stops(center, grid_distance, moving_freq, moving_side,
+                    moving_tp_fn, moving_sl_fn, slot):
+    """Moving-slot TP/SL anchored on this scenario's CENTER."""
+    up = center + grid_distance
+    down = center - grid_distance
+    tp = moving_tp_fn(up, down, slot, moving_freq, moving_side)
+    sl = moving_sl_fn(up, down, slot, moving_freq, moving_side)
+    return float(tp), float(sl)
+
+
+def compute_limit_levels(symbol, mid, entry_offset, info, tick):
+    """Effective offset and both levels, with the stops/spread floor applied.
+
+    floor = max(MIN_STOP_PIPS_PER_ASSET[symbol], trade_stops_level * point)
+            + current spread
+
+    Single floor for the whole system -- the same MIN_STOP_PIPS_PER_ASSET that
+    _check_min_stops already uses. No separate safety_margin knob.
+    """
+    point = float(getattr(info, "point", 0) or 0)
+    digits = int(getattr(info, "digits", 5))
+    stops_level = int(getattr(info, "trade_stops_level", 0) or 0)
+    spread = float(tick.ask - tick.bid)
+    min_stop_pips = MIN_STOP_PIPS_PER_ASSET.get(symbol, 10)
+
+    floor = max(float(min_stop_pips) * point, float(stops_level) * point) + spread
+    requested = float(entry_offset)
+    effective = max(requested, floor)
+    clamped = effective > requested
+
+    lower = round(mid - effective, digits)
+    upper = round(mid + effective, digits)
+    return {
+        "requested_offset": requested,
+        "effective_offset": effective,
+        "floor": floor,
+        "clamped": clamped,
+        "spread": spread,
+        "min_stop_pips": min_stop_pips,
+        "stops_level": stops_level,
+        "point": point,
+        "digits": digits,
+        "mid": mid,
+        "lower": lower,
+        "upper": upper,
+    }
+
+
+def build_limit_plan(symbol, moving_side, moving_lot, constant_lot,
+                     moving_total, constant_total, moving_tp_fn, moving_sl_fn,
+                     grid_distance, moving_freq, lower, upper,
+                     cmd_hint=None):
+    """Build every line the EA needs for one limit-trigger open.
+
+    Returns a dict with both levels, the per-scenario centers and a `lines`
+    list of PB/PS/CS/CB entries. Which lines carry TP/SL follows the
+    moving/constant setting, so exactly one of {PB, CS} and exactly one of
+    {PS, CB} carry stops.
+    """
+    batch = cmd_hint or secrets.token_hex(2)   # 4 hex chars
+    max_lot = MAX_LOT_PER_ASSET.get(symbol, 100)
+    lines = []
+
+    def _emit(role, letter, lot, center, slot, split_idx):
+        suffix = chr(ord('a') + split_idx) if split_idx else ""
+        # Tag: 4 hex id + 2-char role + 3-digit slot + optional split letter.
+        # Carries enough to map a ticket back to slot and role after a restart,
+        # and stays well inside the 31-char MT5 comment limit.
+        tag = f"{batch}{role}{slot:03d}{suffix}"[:31]
+        if _carries_stops(role, moving_side):
+            tp, sl = _scenario_stops(center, grid_distance, moving_freq,
+                                     moving_side, moving_tp_fn, moving_sl_fn,
+                                     slot)
+        else:
+            # Constant-side orders never carry stops (agent/04: a stray stop
+            # here looks exactly like a queue bug on the terminal).
+            tp, sl = 0.0, 0.0
+        lines.append({
+            "role": role, "side": letter, "lot": float(lot),
+            "tp": tp, "sl": sl, "tag": tag, "slot": slot,
+            "kind": "moving" if _carries_stops(role, moving_side) else "constant",
+        })
+
+    # --- lower scenario, center = lower -----------------------------------
+    # PB buys at the lower level; CS market sells fire if the buys fill.
+    buy_letter = "B" if moving_side == "buy" else "S"
+    for n in range(1, moving_total + 1):
+        for ci, chunk in enumerate(_split_lot(moving_lot, max_lot)):
+            _emit("PB", "B", chunk, lower, n, ci)
+    for n in range(1, constant_total + 1):
+        for ci, chunk in enumerate(_split_lot(constant_lot, max_lot)):
+            _emit("CS", "S", chunk, lower, n, ci)
+
+    # --- upper scenario, center = upper -----------------------------------
+    for n in range(1, moving_total + 1):
+        for ci, chunk in enumerate(_split_lot(moving_lot, max_lot)):
+            _emit("PS", "S", chunk, upper, n, ci)
+    for n in range(1, constant_total + 1):
+        for ci, chunk in enumerate(_split_lot(constant_lot, max_lot)):
+            _emit("CB", "B", chunk, upper, n, ci)
+
+    tags = [ln["tag"] for ln in lines]
+    if len(set(tags)) != len(tags):
+        raise ValueError("internal: duplicate tags generated for limit plan")
+
+    pb = [l for l in lines if l["role"] == "PB"]
+    ps = [l for l in lines if l["role"] == "PS"]
+    cs = [l for l in lines if l["role"] == "CS"]
+    cb = [l for l in lines if l["role"] == "CB"]
+    return {
+        "symbol": symbol,
+        "lower": float(lower),
+        "upper": float(upper),
+        "center_lower": float(lower),
+        "center_upper": float(upper),
+        "moving_side": moving_side,
+        "batch": batch,
+        "lines": lines,
+        "pb_count": len(pb), "ps_count": len(ps),
+        "cs_count": len(cs), "cb_count": len(cb),
+        "expected_buy": len(pb),
+        "expected_sell": len(ps),
+        "burst_expected": len(cs) + len(cb),
+    }
+
+
+def preflight_limit(symbol, plan, levels, burst_mode="AFTER_CANCEL"):
+    """Doc 08 section 5 preflight. Raises LimitPreflightError with a specific
+    message; never silently falls back to burst mode."""
+    info = mt5.symbol_info(symbol)
+    tick = mt5.symbol_info_tick(symbol)
+    account = mt5.account_info()
+    if info is None or tick is None or account is None:
+        raise LimitPreflightError(
+            f"preflight: no symbol info/tick/account info for {symbol}")
+
+    point = levels["point"]
+    stops_level = float(levels["stops_level"]) * point
+    freeze_level = float(getattr(info, "trade_freeze_level", 0) or 0) * point
+
+    # 1. Pending-order cap, counting EVERY pending on the account (the cap is
+    #    account-wide, so another symbol's armed ladder counts against it).
+    cap = int(getattr(account, "limit_orders", 0) or 0)
+    if cap > 0:
+        existing = len(mt5.orders_get() or ())
+        need = plan["pb_count"] + plan["ps_count"]
+        if existing + need > cap:
+            raise LimitPreflightError(
+                f"preflight: account pending-order cap is {cap}; {existing} "
+                f"already open and this arm needs {need} more "
+                f"({plan['pb_count']} buy limits + {plan['ps_count']} sell "
+                f"limits). Reduce counts on {symbol} or on other symbols.")
+
+    # 2. Both levels must respect the stops level against a fresh tick.
+    for name, level, ref in (("lower", plan["lower"], tick.ask),
+                             ("upper", plan["upper"], tick.bid)):
+        if abs(ref - level) < stops_level:
+            raise LimitPreflightError(
+                f"preflight: {name} level {level} is within {stops_level} of "
+                f"the current {ref} on {symbol} (stops level). Price moved "
+                f"since the plan was built.")
+
+    # 3. Freeze level on both ladders.
+    for name, level, ref in (("lower", plan["lower"], tick.ask),
+                             ("upper", plan["upper"], tick.bid)):
+        if freeze_level > 0 and abs(ref - level) < freeze_level:
+            raise LimitPreflightError(
+                f"preflight: {name} level {level} is inside the freeze level "
+                f"({freeze_level}) around {ref} on {symbol}")
+
+    # 4. Per-direction volume against the symbol limit (pendings count).
+    limit = MAX_VOLUME_PER_ASSET.get(symbol)
+    if limit:
+        buy_vol = sum(l["lot"] for l in plan["lines"] if l["role"] == "PB")
+        sell_vol = sum(l["lot"] for l in plan["lines"] if l["role"] == "PS")
+        for side, vol in (("buy ladder", buy_vol), ("sell ladder", sell_vol)):
+            if vol > limit:
+                raise LimitPreflightError(
+                    f"preflight: {side} volume {vol} exceeds the {symbol} "
+                    f"limit {limit}. Reduce counts or lot size.")
+        if burst_mode == "PARALLEL":
+            # Both contingent bursts sit on top of the still-live pendings.
+            burst_vol = sum(l["lot"] for l in plan["lines"]
+                            if l["role"] in ("CS", "CB"))
+            if buy_vol + sell_vol + burst_vol > limit:
+                raise LimitPreflightError(
+                    f"preflight: PARALLEL mode needs pendings ({buy_vol + sell_vol}) "
+                    f"plus burst ({burst_vol}) = {buy_vol + sell_vol + burst_vol}, "
+                    f"over the {symbol} limit {limit}. Use AFTER_CANCEL or "
+                    f"reduce counts.")
+
+    # 5. Per-order volume after splitting.
+    max_lot = MAX_LOT_PER_ASSET.get(symbol, 100)
+    for l in plan["lines"]:
+        if l["lot"] > max_lot + 1e-9:
+            raise LimitPreflightError(
+                f"preflight: order lot {l['lot']} exceeds the per-order cap "
+                f"{max_lot} for {symbol} after splitting (tag {l['tag']})")
+
+    # 6. Moving-side TP/SL must respect the minimum stop distance.
+    for l in plan["lines"]:
+        if l["tp"] == 0.0 and l["sl"] == 0.0:
+            continue
+        err = _check_min_stops(symbol, l["side"], l["tp"], l["sl"])
+        if err:
+            raise LimitPreflightError(f"preflight: {err} ({symbol} {l['role']})")
+
+    return True
 
 
 async def _abort_cleanup(bridge, symbol: str):
