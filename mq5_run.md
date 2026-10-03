@@ -97,7 +97,9 @@ removes the pending ladders rather than leaving them on the book.
 
 ## 5. Demo test steps
 
-Full procedure in `experts/LIMIT_TRIGGER_MANUAL_TEST.md`. The short version:
+Full procedure in `experts/LIMIT_TRIGGER_VPS_CHECKLIST.md` (the pre-flight and
+comparison checklist) and `experts/LIMIT_TRIGGER_MANUAL_TEST.md` (the EA state
+machine, one test per abort path). The short version:
 
 1. Demo account, EA compiled and attached, Python bot stopped.
 2. Set one symbol to Limit Trigger, Entry Offset at or above the symbol's minimum
