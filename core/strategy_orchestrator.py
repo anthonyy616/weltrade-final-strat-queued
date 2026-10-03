@@ -165,7 +165,13 @@ class StrategyOrchestrator:
             # Use return_exceptions=True implicitly via safe wrapper
             # But utilizing gather ensures parallel execution
             await asyncio.gather(*tasks)
-        
+
+        # The strategies are gone now, so remember which symbols had pendings
+        # before dropping the references. Per-strategy terminate() already
+        # swept its own symbol; this covers symbols whose strategy object was
+        # never created but whose pendings survived (doc 08 section 8).
+        await self._sweep_all_pendings()
+
         self.strategies.clear()
         self.active_symbols.clear()
         
@@ -205,6 +211,58 @@ class StrategyOrchestrator:
             print(f"[TERMINATE ALL] Cleaned up {count} residual positions.")
 
         print("[TERMINATE ALL] All strategies terminated (or attempted).")
+
+    async def _sweep_all_pendings(self):
+        """Remove any pending order carrying our magic, grouped by symbol.
+
+        Sweeps stay symbol+magic scoped even here: the magic is shared across
+        symbols, so a single magic-wide removal would be one symbol's sweep
+        cancelling another's. Reading orders_get account-wide is only used to
+        discover WHICH symbols still have pendings.
+        """
+        import MetaTrader5 as mt5
+        from core.bulk_orders import MAGIC_NUMBER
+
+        try:
+            orders = mt5.orders_get() or ()
+        except Exception as e:
+            print(f"[TERMINATE ALL] could not list pending orders: {e}")
+            return
+
+        symbols = {o.symbol for o in orders if o.magic == MAGIC_NUMBER}
+        if not symbols:
+            return
+
+        from core.bot_manager import BotManager
+        holder = getattr(BotManager, "_last_instance", None)
+        bridge = getattr(holder, "ea_bridge", None) if holder else None
+
+        for sym in sorted(symbols):
+            count = sum(1 for o in orders if o.symbol == sym
+                        and o.magic == MAGIC_NUMBER)
+            print(f"[TERMINATE ALL] sweeping {count} pending order(s) on {sym}")
+            if bridge is None:
+                # No bridge: remove directly, symbol+magic scoped.
+                for o in orders:
+                    if o.symbol != sym or o.magic != MAGIC_NUMBER:
+                        continue
+                    try:
+                        mt5.order_send({
+                            "action": mt5.TRADE_ACTION_REMOVE,
+                            "symbol": sym,
+                            "position": o.ticket,
+                            "magic": MAGIC_NUMBER,
+                            "comment": "term-all-sweep",
+                        })
+                    except Exception as e:
+                        print(f"[TERMINATE ALL] remove #{o.ticket} on {sym} "
+                              f"failed: {e}")
+            else:
+                try:
+                    await bridge.cancel_all_pendings(sym, MAGIC_NUMBER,
+                                                     deadline_s=10.0)
+                except Exception as e:
+                    print(f"[TERMINATE ALL] sweep of {sym} raised: {e}")
 
     async def close(self):
         """Release any open resources held by strategies and repositories."""

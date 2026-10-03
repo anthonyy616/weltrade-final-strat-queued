@@ -500,10 +500,13 @@ def preflight_limit(symbol, plan, levels, burst_mode="AFTER_CANCEL"):
                 f"{max_lot} for {symbol} after splitting (tag {l['tag']})")
 
     # 6. Moving-side TP/SL must respect the minimum stop distance.
+    #    _check_min_stops wants "buy"/"sell"; plan lines carry "B"/"S".
+    _SIDE_WORD = {"B": "buy", "S": "sell"}
     for l in plan["lines"]:
         if l["tp"] == 0.0 and l["sl"] == 0.0:
             continue
-        err = _check_min_stops(symbol, l["side"], l["tp"], l["sl"])
+        err = _check_min_stops(symbol, _SIDE_WORD.get(l["side"], l["side"]),
+                               l["tp"], l["sl"])
         if err:
             raise LimitPreflightError(f"preflight: {err} ({symbol} {l['role']})")
 

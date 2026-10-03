@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -34,6 +35,16 @@ except Exception as _e:   # pragma: no cover
 # Per-order lot cap, shared with the bulk path so the sequential fallback
 # enforces the same limit the EA path does.
 MAX_LOT_PER_ASSET = getattr(bulk_orders, "MAX_LOT_PER_ASSET", {}) if _bulk_available else {}
+
+# How many times one cycle may re-arm around a new price before the open is
+# treated as a failure (doc 08 section 8: ARM_TIMEOUT is not an error, but an
+# unbounded re-arm loop would hang the open forever).
+MAX_LIMIT_REARMS = 3
+
+# Reconcile after DONE retries for ~1 s: positions_get can lag the deal events
+# that the EA has already seen (doc 08 section 8).
+RECONCILE_RETRY_S = 1.0
+RECONCILE_RETRY_DELAY_S = 0.2
 
 
 def _split_lot(lot: float, max_lot: float) -> List[float]:
@@ -186,6 +197,22 @@ class QueuedCloseState:
     moving_lot: float = 0.01
     constant_lot: float = 0.01
 
+    # Limit-trigger open mode snapshot (doc 08 section 4/8). Captured at
+    # start() with the rest of the snapshot, never read live mid-cycle.
+    open_mode: str = "burst"
+    entry_offset: float = 50.0
+    armed_timeout_seconds: int = 120
+    win_fill_deadline_ms: int = 1500
+    cancel_ack_deadline_ms: int = 1500
+    burst_mode: str = "AFTER_CANCEL"
+    max_consecutive_open_failures: int = 3
+
+    # Set only while the limit open is in flight, so stop()/terminate() can
+    # tell an armed symbol from an open one. Persisted with the ARMED phase.
+    arm_lower: float = 0.0
+    arm_upper: float = 0.0
+    arm_cmd_id: str = ""
+
 
 # ---------------------------------------------------------------------------
 # Engine
@@ -222,6 +249,13 @@ class QueuedCloseStrategyEngine:
         # Set by reconcile_on_startup when a live cycle was recovered from
         # disk. start() resumes that cycle instead of opening a second pool.
         self.recovered = False
+
+        # Consecutive failed limit opens. In memory only on purpose: a restart
+        # clears it, and persisted counts would be stale shadow state.
+        self._consecutive_open_failures = 0
+        # True only between "persisted ARMED" and the terminal phase.
+        self._limit_armed = False
+        self._last_open_quality: Optional[dict] = None
 
     # ------------------------------------------------------------------
     # Accessors
@@ -309,6 +343,17 @@ class QueuedCloseStrategyEngine:
         self.state.moving_lot = buy_lot if moving_side == "buy" else sell_lot
         self.state.constant_lot = buy_lot if constant_side == "buy" else sell_lot
 
+        # Limit-trigger snapshot, read here and never again for this cycle.
+        self.state.open_mode = cfg.get("open_mode", "burst")
+        self.state.entry_offset = float(cfg.get("entry_offset", 50.0))
+        gbl = self.config_manager.get_global_config() or {}
+        self.state.armed_timeout_seconds = int(gbl.get("armed_timeout_seconds", 120))
+        self.state.win_fill_deadline_ms = int(gbl.get("win_fill_deadline_ms", 1500))
+        self.state.cancel_ack_deadline_ms = int(gbl.get("cancel_ack_deadline_ms", 1500))
+        self.state.burst_mode = gbl.get("burst_mode", "AFTER_CANCEL")
+        self.state.max_consecutive_open_failures = int(
+            gbl.get("max_consecutive_open_failures", 3))
+
         self.running = True
         self.graceful_stop = False
         self._clear_cycle_state()
@@ -380,6 +425,22 @@ class QueuedCloseStrategyEngine:
 
         moving_leg = "MovingBuy" if self.state.moving_side == "buy" else "MovingSell"
         constant_leg = "ConstantBuy" if self.state.moving_side == "sell" else "ConstantSell"
+
+        # --- Open path selection (doc 08 section 8) ---
+        #
+        # limit_trigger takes its own branch and NEVER falls back to the
+        # sequential loop below: if the EA is unavailable or refuses, the open
+        # fails loudly instead of silently opening in burst mode. Burst is
+        # untouched: the EA bulk path first, sequential loop as its fallback.
+        if self.state.open_mode == "limit_trigger":
+            await self._try_limit_open(moving_leg, constant_leg)
+            # _try_limit_open returns True when the open was HANDLED, which
+            # includes a definitive stop by the failure breaker. Never stamp
+            # ACTIVE over a symbol that was just stopped.
+            if self.running and self.state.phase != "IDLE":
+                self.state.phase = "ACTIVE"
+                await self._save_symbol_state()
+            return
 
         # --- Try the EA bulk path first (plan E.2/E.4); the sequential loop
         # below is the untouched fallback, selected when EA status is
@@ -639,12 +700,32 @@ class QueuedCloseStrategyEngine:
             self.running = False
             return True
 
-        # Feed the tag -> (ticket, entry) map into the existing tracking (plan
-        # E.2g: reuse the engine's state, no new state invented).
-        constant_side = "sell" if self.state.moving_side == "buy" else "buy"
+        # Feed the tag -> (ticket, entry) map into the existing tracking via the
+        # shared post-open routine (doc 08 section 8).
+        await self._register_open_positions(orders, tickets, moving_leg,
+                                           constant_leg)
+        self.activity_log.log_info(
+            f"EA bulk open: {len(tickets)} positions opened in one batch")
+        return True
+
+    async def _register_open_positions(self, orders: List[dict],
+                                       tickets: Dict[str, Tuple[int, float]],
+                                       moving_leg: str, constant_leg: str):
+        """Shared post-open routine (doc 08 section 8).
+
+        Registers opened positions into the engine's existing tracking,
+        persists them and logs them. The burst branch and the limit branch both
+        call this, so there is exactly ONE copy of this logic.
+
+        `orders` entries carry "tag", "slot", "kind" and "lot"; `tickets` maps
+        tag -> (ticket, entry) as verified against positions_get.
+        """
         repo = await self._ensure_repository_async()
+        by_tag = {o["tag"]: o for o in orders}
         for tag, (ticket, entry) in tickets.items():
-            order = next(o for o in orders if o["tag"] == tag)
+            order = by_tag.get(tag)
+            if order is None:
+                continue
             if order["kind"] == "moving":
                 if order["slot"] in [r.slot_index for r in
                                      self.state.moving_positions.values()]:
@@ -674,9 +755,370 @@ class QueuedCloseStrategyEngine:
                     self.activity_log.log_fire(
                         self.state.cycle_count, constant_leg, entry,
                         order["lot"], 0.0, 0.0, ticket)
+
+    # ------------------------------------------------------------------
+    # Limit-trigger open path (doc 08 sections 5, 8 and 9)
+    # ------------------------------------------------------------------
+
+    async def _sweep_pendings(self, reason: str = "") -> bool:
+        """Remove every pending order for this symbol's magic. EA command
+        first, direct orders_get fallback inside the bridge (doc 08 section 8).
+
+        Scoped to symbol+magic: the magic is shared across symbols, so a
+        magic-wide sweep here would cancel another symbol's live ladder.
+        """
+        if self.ea_bridge is None:
+            # No bridge: fall back to a direct sweep so a stop or terminate can
+            # never leave a pending order behind.
+            import MetaTrader5 as mt5_direct
+
+            def _pending():
+                return [o.ticket for o in
+                        (mt5_direct.orders_get(symbol=self.mt5_symbol) or ())
+                        if o.magic == self.MAGIC_NUMBER]
+
+            for _ in range(3):
+                pending = await asyncio.to_thread(_pending)
+                if not pending:
+                    return True
+                await asyncio.to_thread(self._remove_pending_direct, pending)
+                await asyncio.sleep(0.2)
+            left = await asyncio.to_thread(_pending)
+            self.activity_log.log_error(
+                f"[LIMIT] direct pending sweep left {len(left)} order(s) "
+                f"on {self.mt5_symbol} ({reason})")
+            return False
+        try:
+            return await self.ea_bridge.cancel_all_pendings(
+                self.mt5_symbol, self.MAGIC_NUMBER, deadline_s=10.0)
+        except Exception as e:
+            self.activity_log.log_error(
+                f"[LIMIT] pending sweep raised on {self.mt5_symbol}: {e}")
+            return False
+
+    def _remove_pending_direct(self, tickets: List[int]) -> None:
+        for tkt in tickets:
+            try:
+                mt5.order_send({
+                    "action": mt5.TRADE_ACTION_REMOVE,
+                    "symbol": self.mt5_symbol,
+                    "position": tkt,
+                    "magic": self.MAGIC_NUMBER,
+                    "comment": "eng-sweep",
+                })
+            except Exception as e:
+                self.activity_log.log_error(
+                    f"[LIMIT] direct remove of #{tkt} raised: {e}")
+
+    async def _flatten_and_reset(self, reason: str):
+        """Every limit failure converges here: sweep pendings, flatten, and
+        leave the cycle ready to restart (doc 08 section 3.5)."""
+        self.activity_log.log_info(f"[LIMIT] failure path ({reason}): "
+                                   "sweeping pendings and flattening")
+        await self._sweep_pendings(reason)
+        await self._force_close_everything()
+        repo = self.repository
+        if repo is not None:
+            await repo.clear_constant_queue(self.state.cycle_count)
+            await repo.clear_constant_tickets()
+            await repo.clear_moving_positions()
+        self._clear_cycle_state()
+
+    async def _try_limit_open(self, moving_leg: str, constant_leg: str) -> bool:
+        """Arm a limit-trigger ladder, reconcile, then hand off to the shared
+        post-open routine.
+
+        Owns the retry loop so a failure never recurses: each iteration is a
+        full restart of the cycle, bounded by max_consecutive_open_failures.
+        Returns True whenever the open was handled (success, or a definitive
+        stop) so the caller never falls through to the sequential path.
+        """
+        rearms = 0
+        while True:
+            status, detail = await self._limit_open_once(moving_leg,
+                                                          constant_leg)
+
+            if status == "OK":
+                self._consecutive_open_failures = 0
+                return True
+
+            if status == "REARM" and rearms < MAX_LIMIT_REARMS:
+                rearms += 1
+                self.activity_log.log_info(
+                    f"[LIMIT] re-arm {rearms}/{MAX_LIMIT_REARMS} around the "
+                    f"current price ({detail})")
+                # A re-arm is NOT a new cycle: same cycle id, same targets.
+                # Only the levels move, so recompute them and try again.
+                await self._recompute_cycle_levels()
+                continue
+
+            if status == "REARM":
+                detail = (f"REARM_EXHAUSTED after {MAX_LIMIT_REARMS} re-arms "
+                          f"({detail})")
+
+            # Definitive failure: sweep, flatten, count it, restart or stop.
+            await self._flatten_and_reset(detail)
+            self._consecutive_open_failures += 1
+            n = self._consecutive_open_failures
+            limit = max(1, self.state.max_consecutive_open_failures)
+            if n >= limit:
+                self.state.phase = "IDLE"
+                self.running = False
+                self.state.arm_cmd_id = ""
+                self.state.arm_lower = 0.0
+                self.state.arm_upper = 0.0
+                await self._save_symbol_state()
+                self.activity_log.log_error(
+                    f"[LIMIT] STOPPED: {n} consecutive failed opens on "
+                    f"{self.mt5_symbol} (limit {limit}). Last reason: "
+                    f"{detail}. Not retrying — widen entry_offset, lower the "
+                    f"counts, or switch this symbol back to Burst mode.")
+                return True
+
+            self.activity_log.log_error(
+                f"[LIMIT] open failed ({detail}); failure {n}/{limit}, "
+                "restarting the cycle")
+            # Restart the cycle from scratch (doc 08 section 8). The restart
+            # re-enters _start_new_cycle_at_market, which re-enters THIS
+            # method, so return instead of looping again -- otherwise the
+            # outer frame arms a second time after the breaker has already
+            # stopped the symbol.
+            self._clear_cycle_state()
+            self.state.cycle_count += 1
+            await self._start_new_cycle_at_market()
+            return True
+
+    async def _recompute_cycle_levels(self, center: float = None):
+        """Re-derive the cycle levels and target lists from a center.
+
+        Targets are a pure function of the center (doc 08 section 8), so this
+        is the single place that recomputes them. `center` is passed
+        explicitly on a successful open -- the center is the level that
+        TRIGGERED, never the average fill and never the live mid. With no
+        argument (a re-arm) it re-anchors on the current mid, which is exactly
+        what a re-arm is for.
+        """
+        if center is None:
+            tick = mt5.symbol_info_tick(self.mt5_symbol)
+            if not tick:
+                return
+            center = (tick.ask + tick.bid) / 2
+        self.state.center_price = center
+        self.state.grid_level_up = center + self.state.grid_distance
+        self.state.grid_level_down = center - self.state.grid_distance
+        up_prices, down_prices = compute_constant_targets(
+            self.state.grid_level_up, self.state.grid_level_down,
+            self.state.moving_freq, self.state.constant_freq,
+            self.state.moving_side, self.state.constant_total)
+        self.state.up_targets = [
+            ConstantTargetLevel(price=p, direction="up", slot_index=n)
+            for p, n in up_prices]
+        self.state.down_targets = [
+            ConstantTargetLevel(price=p, direction="down", slot_index=n)
+            for p, n in down_prices]
+        repo = await self._ensure_repository_async()
+        await repo.save_constant_targets(self.state.cycle_count, [
+            {"direction": t.direction, "slot_index": t.slot_index,
+             "price": t.price, "fired": False}
+            for t in self.state.up_targets + self.state.down_targets])
+
+    async def _limit_open_once(self, moving_leg: str, constant_leg: str):
+        """One full limit open attempt.
+
+        Returns ("OK", None) on success, ("REARM", reason) for ARM_TIMEOUT, or
+        ("FAIL", reason) for anything else. Never falls back to sequential.
+        """
+        # 1. EA must be available -- limit_trigger refuses rather than
+        #    silently opening in burst mode (doc 08 section 5).
+        if (not _bulk_available or self.ea_bridge is None
+                or self.ea_status is None
+                or not self.ea_status.get("available")):
+            return "FAIL", (
+                "EA_UNAVAILABLE: "
+                f"{self.ea_status.get('reason') if self.ea_status else 'not provisioned'}"
+                " — limit_trigger will not fall back to burst/sequential")
+        if not await self.ea_bridge.healthy():
+            return "FAIL", "EA_UNHEALTHY: not answering a ping"
+
+        info = mt5.symbol_info(self.mt5_symbol)
+        tick = mt5.symbol_info_tick(self.mt5_symbol)
+        if info is None or tick is None:
+            return "FAIL", "NO_TICK_OR_SYMBOL_INFO"
+
+        # 2. Levels from a FRESH mid, with the single floor applied and
+        #    logged loudly whenever it moves the offset.
+        mid = (tick.ask + tick.bid) / 2
+        levels = bulk_orders.compute_limit_levels(
+            self.mt5_symbol, mid, self.state.entry_offset, info, tick)
+        if levels["clamped"]:
+            self.activity_log.log_info(
+                f"[LIMIT] entry_offset clamped UP: requested "
+                f"{levels['requested_offset']} -> effective "
+                f"{levels['effective_offset']} "
+                f"(floor {levels['floor']} = max(min_stop_pips "
+                f"{levels['min_stop_pips']}, stops_level "
+                f"{levels['stops_level']} x point) + spread "
+                f"{levels['spread']})")
+
+        # 3. Build both scenarios from their own centers.
+        plan = bulk_orders.build_limit_plan(
+            self.mt5_symbol, self.state.moving_side,
+            self.state.moving_lot, self.state.constant_lot,
+            self.state.moving_total, self.state.constant_total,
+            moving_tp_level, moving_sl_level,
+            self.state.grid_distance, self.state.moving_freq,
+            levels["lower"], levels["upper"])
         self.activity_log.log_info(
-            f"EA bulk open: {len(tickets)} positions opened in one batch")
-        return True
+            f"[LIMIT] plan: lower {plan['lower']} ({plan['pb_count']} buy "
+            f"limits), upper {plan['upper']} ({plan['ps_count']} sell "
+            f"limits), burst {plan['burst_expected']} order(s), "
+            f"{levels['effective_offset']} either side of mid {mid}")
+
+        # 4. Preflight -- loud failure, nothing placed.
+        try:
+            bulk_orders.preflight_limit(self.mt5_symbol, plan, levels,
+                                        self.state.burst_mode)
+        except bulk_orders.LimitPreflightError as e:
+            self.activity_log.log_error(f"[LIMIT] preflight refused: {e}")
+            return "FAIL", f"PREFLIGHT_FAIL: {e}"
+        self.activity_log.log_info("[LIMIT] preflight passed")
+
+        # 5. Persist ARMED (phase, both levels, cmd id -- NOT the pending
+        #    tickets: recovery sweeps by symbol+magic, so storing them would be
+        #    shadow state that can go stale). Doc 08 section 8.
+        cmd_id = uuid.uuid4().hex[:8]
+        self.state.arm_cmd_id = cmd_id
+        self.state.arm_lower = plan["lower"]
+        self.state.arm_upper = plan["upper"]
+        self.state.phase = "ARMED"
+        self._limit_armed = True
+        await self._save_symbol_state()
+
+        # 6. Arm and wait for a terminal phase.
+        try:
+            phase = await self.ea_bridge.arm_limit(
+                self.mt5_symbol, self.MAGIC_NUMBER, plan,
+                armed_timeout_ms=self.state.armed_timeout_seconds * 1000,
+                win_fill_deadline_ms=self.state.win_fill_deadline_ms,
+                cancel_ack_deadline_ms=self.state.cancel_ack_deadline_ms,
+                burst_mode=self.state.burst_mode,
+                cmd_id=cmd_id,
+                on_phase=lambda d: self.activity_log.log_info(
+                    f"[LIMIT] {d.get('phase')} {d.get('reason', '')}".strip()))
+        except Exception as e:
+            self._limit_armed = False
+            return "FAIL", f"ARM_ERROR: {e}"
+        finally:
+            self._limit_armed = False
+
+        if phase.get("phase") != "DONE":
+            reason = phase.get("reason", "UNKNOWN")
+            await self._sweep_pendings(f"abort {reason}")
+            if reason == "ARM_TIMEOUT":
+                return "REARM", "ARM_TIMEOUT"
+            return "FAIL", f"EA_ABORT: {reason}"
+
+        # 7. Reconcile against positions_get and orders_get. Python never
+        #    trusts the EA's DONE alone (doc 08 section 8). Only the
+        #    TRIGGERED scenario's half is expected to be filled -- the losing
+        #    ladder was cancelled, so expecting all 8 lines would fail every
+        #    single open.
+        triggered_roles = ("PB", "CS") if str(phase.get("trigger_side",
+                                                        "0")) == "1" \
+            else ("PS", "CB")
+        tickets, err = await self._reconcile_limit_open(plan, triggered_roles)
+        if err:
+            await self._sweep_pendings(f"reconcile {err}")
+            return "FAIL", f"RECONCILE_FAIL: {err}"
+
+        # 8. Center is the LEVEL THAT TRIGGERED, never the average fill
+        #    price, so Python's targets match the anchors the broker used.
+        side = str(phase.get("trigger_side", "0"))
+        center = plan["lower"] if side == "1" else plan["upper"]
+        triggered = "lower" if side == "1" else "upper"
+        self.state.center_price = center
+        self.state.grid_level_up = center + self.state.grid_distance
+        self.state.grid_level_down = center - self.state.grid_distance
+        # Explicit center: the level that triggered, NOT the live mid.
+        await self._recompute_cycle_levels(center)
+        self.state.arm_cmd_id = ""
+        self.state.arm_lower = 0.0
+        self.state.arm_upper = 0.0
+        self.activity_log.log_info(
+            f"[LIMIT] center set to the {triggered} level {center} "
+            f"(NOT the average fill price); targets recomputed and persisted")
+        self._last_open_quality = dict(phase)
+
+        # 9. Shared post-open -- the same routine the burst branch calls.
+        await self._register_open_positions(plan["lines"], tickets, moving_leg,
+                                           constant_leg)
+        self.activity_log.log_info(
+            f"[LIMIT] open complete: {len(tickets)} positions registered")
+        return "OK", None
+
+    async def _reconcile_limit_open(self, plan: dict, roles: tuple = None):
+        """Verify the open against the broker, never against the EA's word.
+
+        `roles` limits the expectation to the half that should be filled for
+        the triggered scenario (PB+CS on a lower trigger, PS+CB on an upper
+        one); the losing ladder is expected to be GONE, not filled.
+
+        Returns (tag -> (ticket, entry), error_message). Retries for ~1 s
+        because positions_get can lag the deal events the EA has seen.
+        """
+        lines = [l for l in plan["lines"]
+                 if roles is None or l["role"] in roles]
+        all_tags = {l["tag"] for l in plan["lines"]}
+        by_tag = {o["tag"]: o for o in lines}
+        want_buy = [t for t, o in by_tag.items()
+                    if o["side"] == "B"]
+        want_sell = [t for t, o in by_tag.items()
+                     if o["side"] == "S"]
+
+        deadline = time.monotonic() + RECONCILE_RETRY_S
+        last_err = "not attempted"
+        while True:
+            def _snapshot():
+                positions = [p for p in (mt5.positions_get(symbol=self.mt5_symbol) or [])
+                             if p.magic == self.MAGIC_NUMBER]
+                pending = [o.ticket for o in
+                           (mt5.orders_get(symbol=self.mt5_symbol) or ())
+                           if o.magic == self.MAGIC_NUMBER]
+                return positions, pending
+
+            positions, pending = await asyncio.to_thread(_snapshot)
+
+            by_comment = {p.comment: (p.ticket, p.price_open) for p in positions}
+            tickets = {t: by_comment[t] for t in by_tag if t in by_comment}
+
+            missing = [t for t in by_tag if t not in tickets]
+            got_buy = len([t for t in tickets if by_tag[t]["side"] == "B"])
+            got_sell = len([t for t in tickets if by_tag[t]["side"] == "S"])
+            want_buy_n = len(want_buy)
+            want_sell_n = len(want_sell)
+
+            if not missing and not pending and \
+                    got_buy == want_buy_n and got_sell == want_sell_n:
+                return tickets, None
+
+            # Positions belonging to the LOSING scenario are just as wrong as
+            # missing ones -- both trigger sides filled at once.
+            loser = [p.comment for p in positions
+                     if p.comment in all_tags and p.comment not in by_tag]
+            last_err = (
+                f"{len(missing)}/{len(by_tag)} positions missing "
+                f"(buy {got_buy}/{want_buy_n}, sell {got_sell}/{want_sell_n}), "
+                f"{len(pending)} pending order(s) left"
+                + (f", missing tags {missing[:6]}" if missing else "")
+                + (f", UNEXPECTED loser-side fills {loser[:6]}" if loser
+                   else ""))
+
+            if time.monotonic() >= deadline:
+                self.activity_log.log_error(
+                    f"[LIMIT] reconcile mismatch after {RECONCILE_RETRY_S:.0f}s "
+                    f"retry: {last_err}")
+                return {}, last_err
+            await asyncio.sleep(RECONCILE_RETRY_DELAY_S)
 
     async def _ea_close_tickets(self, tickets: List[int]) -> bool:
         """Close 3+ tickets through the EA (plan E.3); False if the EA is
@@ -738,6 +1180,31 @@ class QueuedCloseStrategyEngine:
         bot stops. No new cycle starts once this flag is set."""
         if not self.running:
             return
+        # An ARMED symbol has no positions to wait for: abort the arm and its
+        # pendings instead (doc 08 section 8 lifecycle hooks).
+        if self._limit_armed or self.state.phase == "ARMED":
+            self.activity_log.log_info(
+                f"[LIMIT] stop while ARMED on {self.mt5_symbol}: aborting the "
+                "arm and sweeping pendings")
+            self._limit_armed = False
+            if self.ea_bridge is not None:
+                try:
+                    await self.ea_bridge.abort_arm(self.mt5_symbol,
+                                                   self.MAGIC_NUMBER)
+                except Exception as e:
+                    self.activity_log.log_error(
+                        f"[LIMIT] abort_arm during stop raised: {e}")
+            await self._sweep_pendings("graceful stop while armed")
+            self.state.phase = "IDLE"
+            self.state.arm_cmd_id = ""
+            self.state.arm_lower = 0.0
+            self.state.arm_upper = 0.0
+            self.running = False
+            self.graceful_stop = True
+            await self._save_symbol_state()
+            self.activity_log.log_stop(self.state.cycle_count,
+                                       "graceful_stop_armed_aborted")
+            return
         self.graceful_stop = True
         self.activity_log.log_graceful_stop(self.state.cycle_count, "manual/timeout")
         if self.state.phase == "IDLE" or (
@@ -750,6 +1217,10 @@ class QueuedCloseStrategyEngine:
         """User-initiated terminate: close everything immediately, clear queue
         and counts as part of the SAME operation (agent/05: a stale queue
         surviving terminate causes a false start next cycle)."""
+        # Sweep BEFORE closing: while armed there may be pendings that would
+        # otherwise fill during the close and leave a new position behind.
+        self._limit_armed = False
+        await self._sweep_pendings("terminate before close")
         self.activity_log.log_info("TERMINATE: Closing all positions...")
         await self._force_close_everything()
         self.state.close_queue = []
@@ -766,6 +1237,12 @@ class QueuedCloseStrategyEngine:
         self.graceful_stop = False
         self.state.phase = "IDLE"
         self.state.cycle_count = 0
+        # Sweep AFTER the close too, so a pending that filled mid-close cannot
+        # survive the terminate (doc 08 section 8 lifecycle hooks).
+        await self._sweep_pendings("terminate after close")
+        self.state.arm_cmd_id = ""
+        self.state.arm_lower = 0.0
+        self.state.arm_upper = 0.0
         await self._save_symbol_state()
         self.activity_log.log_info("TERMINATE: complete")
 
@@ -799,6 +1276,9 @@ class QueuedCloseStrategyEngine:
             "realized_pnl": self.state.realized_pnl,
             "graceful_stop": self.graceful_stop,
             "is_resetting": self.state.phase == "RESETTING",
+            "open_mode": self.state.open_mode,
+            "armed": self._limit_armed or self.state.phase == "ARMED",
+            "consecutive_open_failures": self._consecutive_open_failures,
             "step": self.state.cycle_count,
             "iteration": self.state.cycle_count,
             "current_price": self.current_price,
@@ -1072,6 +1552,18 @@ class QueuedCloseStrategyEngine:
             "realized_pnl": self.state.realized_pnl,
             "moving_lot": self.state.moving_lot,
             "constant_lot": self.state.constant_lot,
+            "open_mode": self.state.open_mode,
+            "entry_offset": self.state.entry_offset,
+            "burst_mode": self.state.burst_mode,
+            "win_fill_deadline_ms": self.state.win_fill_deadline_ms,
+            "cancel_ack_deadline_ms": self.state.cancel_ack_deadline_ms,
+            "armed_timeout_seconds": self.state.armed_timeout_seconds,
+            # ARMED recovery context: phase, both levels and the command id.
+            # The pending ticket set is deliberately NOT persisted -- recovery
+            # sweeps by symbol+magic, so stored tickets would be shadow state.
+            "arm_lower": self.state.arm_lower,
+            "arm_upper": self.state.arm_upper,
+            "arm_cmd_id": self.state.arm_cmd_id,
         })
         await repo.save_state(
             phase=self.state.phase,
@@ -1099,7 +1591,23 @@ class QueuedCloseStrategyEngine:
         await self._ensure_repository_async()
 
         summary = {"replayed": [], "orphans": [], "stale_constant_tickets": [],
-                   "cycle_restarted": False, "resumed": False}
+                   "cycle_restarted": False, "resumed": False,
+                   "pendings_swept": [], "armed_recovered": False}
+
+        # Any pending carrying our magic is removed FIRST, before anything
+        # else can interact with it. Scoped to symbol+magic because the magic
+        # is shared across symbols (doc 08 section 8).
+        try:
+            swept = await self._sweep_pendings("startup reconcile")
+            summary["pendings_swept"].append(
+                {"symbol": self.mt5_symbol, "swept": bool(swept)})
+        except Exception as e:
+            self.activity_log.log_error(
+                f"[LIMIT] startup pending sweep raised on "
+                f"{self.mt5_symbol}: {e}")
+
+        state_row = await self.repository.get_state()
+        persisted_phase = (state_row or {}).get("phase")
 
         # Seed last-known prices from a live tick BEFORE replay: closure
         # direction is inferred from them when deal history is unavailable, and
@@ -1113,6 +1621,27 @@ class QueuedCloseStrategyEngine:
             self.state.catching_up = True
             try:
                 state_row = await self.repository.get_state()
+                if persisted_phase == "ARMED":
+                    # Armed with pendings after a restart means cancel and go
+                    # idle — never resume an armed state (doc 08 section 3.6).
+                    # The sweep above already removed the pendings; flatten
+                    # anything the ladder filled and restart idle.
+                    summary["armed_recovered"] = True
+                    self.activity_log.log_info(
+                        f"[RECOVERY] persisted phase was ARMED on "
+                        f"{self.mt5_symbol}: pendings swept, flattening any "
+                        f"positions the ladder opened and restarting idle")
+                    await self._force_close_everything()
+                    repo = self.repository
+                    if repo is not None:
+                        await repo.clear_constant_queue()
+                        await repo.clear_constant_tickets()
+                        await repo.clear_moving_positions()
+                    self._clear_cycle_state()
+                    self.state.phase = "IDLE"
+                    self.running = False
+                    self.recovered = False
+                    return summary
                 if state_row and state_row.get("phase") in ("ACTIVE", "RESETTING"):
                     await self._rebuild_state_from_db(state_row)
                     await self._verify_constant_tickets(summary)
@@ -1164,6 +1693,18 @@ class QueuedCloseStrategyEngine:
         self.state.constant_closed_count = int(metadata.get("constant_closed_count", 0) or 0)
         self.state.moving_lot = float(metadata.get("moving_lot", 0.01) or 0.01)
         self.state.constant_lot = float(metadata.get("constant_lot", 0.01) or 0.01)
+        self.state.open_mode = metadata.get("open_mode", "burst")
+        self.state.entry_offset = float(metadata.get("entry_offset", 50.0) or 50.0)
+        self.state.burst_mode = metadata.get("burst_mode", "AFTER_CANCEL")
+        self.state.win_fill_deadline_ms = int(
+            metadata.get("win_fill_deadline_ms", 1500) or 1500)
+        self.state.cancel_ack_deadline_ms = int(
+            metadata.get("cancel_ack_deadline_ms", 1500) or 1500)
+        self.state.armed_timeout_seconds = int(
+            metadata.get("armed_timeout_seconds", 120) or 120)
+        self.state.arm_lower = float(metadata.get("arm_lower", 0.0) or 0.0)
+        self.state.arm_upper = float(metadata.get("arm_upper", 0.0) or 0.0)
+        self.state.arm_cmd_id = metadata.get("arm_cmd_id", "") or ""
         self.state.grid_level_up = self.state.center_price + self.state.grid_distance
         self.state.grid_level_down = self.state.center_price - self.state.grid_distance
 

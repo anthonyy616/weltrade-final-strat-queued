@@ -298,6 +298,40 @@ class TradingEngine:
             self.running = False
             self.start_time = None
 
+    async def _sweep_all_symbol_pendings(self):
+        """Remove any pending order carrying our magic before a hard shutdown.
+
+        Grouped by symbol and swept per symbol+magic, because the magic is
+        shared across symbols. Never called on the normal graceful path --
+        strategy.stop() already handles an armed symbol.
+        """
+        try:
+            import MetaTrader5 as mt5_direct
+            from core.bulk_orders import MAGIC_NUMBER
+            orders = mt5_direct.orders_get() or ()
+            symbols = {o.symbol for o in orders if o.magic == MAGIC_NUMBER}
+            if not symbols:
+                return
+            for sym in sorted(symbols):
+                count = sum(1 for o in orders if o.symbol == sym
+                            and o.magic == MAGIC_NUMBER)
+                print(f"[TIMEOUT] sweeping {count} pending order(s) on {sym}")
+                for o in orders:
+                    if o.symbol != sym or o.magic != MAGIC_NUMBER:
+                        continue
+                    try:
+                        mt5_direct.order_send({
+                            "action": mt5_direct.TRADE_ACTION_REMOVE,
+                            "symbol": sym,
+                            "position": o.ticket,
+                            "magic": MAGIC_NUMBER,
+                            "comment": "hardstop-sweep",
+                        })
+                    except Exception as e:
+                        print(f"[TIMEOUT] remove #{o.ticket} on {sym} failed: {e}")
+        except Exception as e:
+            logger.error(f"[TIMEOUT] pending sweep before hard stop failed: {e}")
+
     async def stop(self):
         """
         Gracefully stop the engine.
@@ -391,4 +425,7 @@ class TradingEngine:
             if datetime.now() > self.force_stop_time:
                 logger.critical("[TIMEOUT] Hard stop triggered (Graceful stop exceeded 5 mins). Forcing shutdown.")
                 print(f"\n[TIMEOUT] Hard stop triggered! Forcing shutdown...")
+                # Sweep pendings before the terminal goes away: an ARMED symbol
+                # must not leave a pending order behind (doc 08 section 8).
+                await self._sweep_all_symbol_pendings()
                 await self.stop()

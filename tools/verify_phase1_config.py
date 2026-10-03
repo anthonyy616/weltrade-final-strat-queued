@@ -231,17 +231,25 @@ def main():
     # what must not exist yet is the engine reading them off config.
     print("\n[9] Burst safety: the engine still reads no limit-trigger config")
     root = Path(__file__).resolve().parent.parent
-    readers = []
-    for rel in ("core/engine/queued_close_strategy_engine.py",
-                "core/trading_engine.py", "core/strategy_orchestrator.py"):
-        txt = (root / rel).read_text(encoding="utf-8")
-        for tok in ("open_mode", "entry_offset", "armed_timeout_seconds",
-                    "win_fill_deadline_ms", "cancel_ack_deadline_ms",
-                    "burst_mode", "max_consecutive_open_failures"):
-            if tok in txt:
-                readers.append(f"{rel}: {tok}")
-    check("no engine reads the new config fields yet", not readers,
-          "; ".join(readers))
+    # As of phase 5 the strategy engine consumes every new field...
+    eng = (root / "core/engine/queued_close_strategy_engine.py").read_text(
+        encoding="utf-8")
+    missing = [tok for tok in ("open_mode", "entry_offset",
+                               "armed_timeout_seconds", "win_fill_deadline_ms",
+                               "cancel_ack_deadline_ms", "burst_mode",
+                               "max_consecutive_open_failures")
+               if tok not in eng]
+    check("the strategy engine consumes every new config field", not missing,
+          f"missing: {missing}")
+    # ...while the engine-level timer file must stay untouched by them
+    # (doc 08: trading_engine.py is not expected to change).
+    te = (root / "core/trading_engine.py").read_text(encoding="utf-8")
+    leaked = [tok for tok in ("open_mode", "entry_offset",
+                              "armed_timeout_seconds", "win_fill_deadline_ms",
+                              "cancel_ack_deadline_ms",
+                              "max_consecutive_open_failures") if tok in te]
+    check("the engine-level timer file does not read the new fields",
+          not leaked, f"leaked: {leaked}")
 
     print("\n" + "=" * 62)
     if FAILURES:

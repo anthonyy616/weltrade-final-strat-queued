@@ -171,7 +171,8 @@ class EABridge:
                         burst_mode="AFTER_CANCEL",
                         on_phase=None,
                         overall_timeout_s=None,
-                        armed_slack_s=5.0):
+                        armed_slack_s=5.0,
+                        cmd_id=None):
         """Arm a limit-trigger ladder and wait for a terminal phase.
 
         `plan` is the dict from bulk_orders.build_limit_plan(). Returns the
@@ -182,7 +183,9 @@ class EABridge:
         phase dict as it arrives.
         """
         self._paths()
-        rid = uuid.uuid4().hex[:8]
+        # Callers may pass their own id so the ARMED phase can be persisted
+        # with the command id BEFORE the arm starts (doc 08 section 8).
+        rid = cmd_id or uuid.uuid4().hex[:8]
 
         body = [
             f"{ln['role']}|{ln['slot']}|{ln['lot']:.2f}|"
