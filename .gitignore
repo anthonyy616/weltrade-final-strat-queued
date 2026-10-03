@@ -22,9 +22,7 @@ logs/
 # Per-user generated config files (written by ConfigManager at runtime)
 config_*.json
 
-
-personal/
-agent/
+personal/*
 # Ignore all files in the personal folder except for the README.md file
 
 sync_log.txt
