@@ -29,7 +29,8 @@ from core.ea_log_tail import EALogTail
 
 # Shared EA status; the strategy reads this to pick bulk vs sequential.
 ea_bridge = EABridge()
-ea_status = {"available": False, "version": None, "reason": "not provisioned yet"}
+ea_status = {"available": False, "version": None, "reason": "not provisioned yet",
+             "stale": False}
 
 
 # --- Persistence ---
@@ -76,8 +77,15 @@ async def startup_event():
         ea_status["available"] = status.available
         ea_status["version"] = status.version
         ea_status["reason"] = status.reason
+        ea_status["stale"] = status.stale
         if status.available:
             print(f"[SERVER] EA ready v{status.version}")
+            if status.stale:
+                # Burst still works on an older EA, but limit_trigger cannot:
+                # ARMLIMIT did not exist before v1.3.
+                print(f"[SERVER] WARNING: attached EA v{status.version} is older "
+                      f"than the repo source — limit_trigger will refuse to "
+                      f"arm until the EA is recompiled and reattached")
         else:
             print(f"[SERVER] EA unavailable: {status.reason} (sequential fallback active)")
     except Exception as e:

@@ -1035,6 +1035,15 @@ class QueuedCloseStrategyEngine:
                 " — limit_trigger will not fall back to burst/sequential")
         if not await self.ea_bridge.healthy():
             return "FAIL", "EA_UNHEALTHY: not answering a ping"
+        # An EA older than the repo source is fine for burst but predates the
+        # ARMLIMIT command, so arming would hang until the overall deadline.
+        # Refuse now with a reason that says what to actually do about it.
+        if (self.ea_status or {}).get("stale"):
+            return "FAIL", (
+                f"EA_STALE: attached EA is v{self.ea_status.get('version')} "
+                "but this build needs a newer one — recompile WTExecutor.mq5 "
+                "and reattach the EA; limit_trigger will not fall back to "
+                "burst/sequential")
 
         info = mt5.symbol_info(self.mt5_symbol)
         tick = mt5.symbol_info_tick(self.mt5_symbol)

@@ -37,6 +37,12 @@ class EAStatus:
     available: bool
     version: Optional[str] = None
     reason: str = ""
+    # True when an EA answered but is older than the repo source. It may still
+    # be perfectly good for burst mode, so it is NOT a failure -- but it cannot
+    # run limit_trigger, because it predates the ARMLIMIT command. Surfaced so
+    # the engine can refuse that mode loudly instead of arming into an EA that
+    # never answers.
+    stale: bool = False
 
 
 def _decode_log(data: bytes) -> str:
@@ -51,6 +57,29 @@ def _decode_log(data: bytes) -> str:
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _compile_errors(log_text: str, limit: int = 6) -> str:
+    """Pull the compiler's actual errors out of the MetaEditor log.
+
+    A compile failure that only says "see the log above" is useless to whoever
+    is reading the UI, and this log is the only record of why the EA is
+    missing. Returns a compact one-line summary, or "" when there is nothing
+    that looks like an error line.
+    """
+    errors = []
+    for line in log_text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        # MetaEditor marks them like "path.mq5(123:4) : error 123: message"
+        low = line.lower()
+        if " : error" in low or low.startswith("error") or "fatal" in low:
+            errors.append(line)
+    if not errors:
+        return ""
+    # Keep the tail: with many errors the last one is usually the root cause.
+    return " | ".join(errors[-limit:])[:500]
 
 
 def _find_terminal_exe(ti) -> Optional[Path]:
@@ -320,10 +349,19 @@ async def _ensure(bridge, allow_restart: bool) -> EAStatus:
         if metaeditor is None:
             return EAStatus(available=False,
                             reason="MetaEditor64.exe not found in MT5 install dir")
-        ok, _ = await asyncio.to_thread(_compile, metaeditor, dest, COMPILE_TIMEOUT)
+        ok, log_text = await asyncio.to_thread(_compile, metaeditor, dest,
+                                              COMPILE_TIMEOUT)
         if not ok:
-            return EAStatus(available=False,
-                            reason="EA compile failed (see EA compile log lines above)")
+            # Put the compiler's own words in the reason. Leaving a stale .ex5
+            # in place is deliberate: MT5 may still have it attached and
+            # deleting someone's working build to make a point helps nobody.
+            errs = _compile_errors(log_text)
+            reason = "EA compile failed"
+            if errs:
+                reason += f": {errs}"
+            else:
+                reason += " (no .ex5 produced; see the EA compile log)"
+            return EAStatus(available=False, reason=reason)
         logger.info("EA compiled OK")
 
     # 4. Ping
@@ -334,7 +372,7 @@ async def _ensure(bridge, allow_restart: bool) -> EAStatus:
                 f"EA attached reports v{ver} but repo source is v{WT_EA_VERSION} "
                 "(stale compiled EA attached)")
         logger.info(f"EA ready v{ver}")
-        return EAStatus(available=True, version=ver)
+        return EAStatus(available=True, version=ver, stale=(ver != WT_EA_VERSION))
 
     # 5. Ping failed — restart only when the account has zero open positions
     # (plan decision in section 1) and only when allowed
@@ -393,7 +431,7 @@ async def _ensure(bridge, allow_restart: bool) -> EAStatus:
             logger.warning(
                 f"EA attached reports v{ver} but repo source is v{WT_EA_VERSION}")
         logger.info(f"EA ready v{ver}")
-        return EAStatus(available=True, version=ver)
+        return EAStatus(available=True, version=ver, stale=(ver != WT_EA_VERSION))
     finally:
         # The ini holds the password — ALWAYS delete it, never log it
         try:
