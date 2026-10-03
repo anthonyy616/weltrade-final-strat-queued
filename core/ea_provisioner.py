@@ -22,7 +22,7 @@ logger = logging.getLogger("ea")
 # Repo source of truth for the EA (plan section 2: experts/WTExecutor.mq5)
 EA_SOURCE = Path(__file__).resolve().parent.parent / "experts" / "WTExecutor.mq5"
 # Must match #define WT_EA_VERSION in the .mq5 source (plan C.4)
-WT_EA_VERSION = "1.2"
+WT_EA_VERSION = "1.3"
 
 COMPILE_TIMEOUT = float(os.getenv("EA_COMPILE_TIMEOUT", "60"))
 RELAUNCH_WAIT_S = 90.0

@@ -26,7 +26,8 @@ OrderGetTicket OrderGetString OrderGetInteger OrderSendAsync OrderDelete
 GetTickCount64 GetMicrosecondCount TimeLocal TerminalInfoString
 ZeroMemory TradeServer HistorySelect HistoryDealSelect HistoryDealGetInteger
 HistoryDealGetString ArraySetAsSeries NormalizeDouble PositionGetDouble
-PositionGetTicket OrderGetTicket
+PositionGetTicket OrderGetTicket HistoryDealGetTicket HistoryDealsTotal
+OrderSelect TimeCurrent TimeGMT Sleep
 """.split())
 
 KEYWORDS = set("""
@@ -112,10 +113,11 @@ def main():
     arm_used = set(re.findall(r"\b(arm_[a-z_]\w*)", src))
     arm_decl = set()
     for arr in re.findall(
-            r"^(?:bool|int|long|ulong|uint|double|string)\s+(arm_\w+)\[", src, re.M):
+            r"^(?:bool|int|long|ulong|uint|double|string|datetime)\s+(arm_\w+)\[",
+            src, re.M):
         arm_decl.add(arr)
     # index arrays declared as arm_x[..][..]
-    for m in re.finditer(r"^(?:bool|int|long|ulong|uint|double|string)\s+"
+    for m in re.finditer(r"^(?:bool|int|long|ulong|uint|double|string|datetime)\s+"
                          r"(arm_\w+)\[([A-Z_]+)\]\[([A-Z_]+)\]", src, re.M):
         arm_decl.add(m.group(1))
     check("every arm_* global is declared",
@@ -204,6 +206,62 @@ def main():
     else:
         print("  SKIP  no reference copy at /tmp/wt_old_reference.mq5 "
               "(git show HEAD:experts/WTExecutor.mq5 > that path to enable)")
+
+    print("\n[7] Phase 3: trigger / cancel / burst / deadlines")
+    # PREFLIGHT_FAIL is Python's, not the EA's: the EA is never reached when a
+    # preflight check fails, so it must NOT appear here.
+    abort_reasons = ["PLACE_SHORT", "ARM_TIMEOUT", "BOTH_SIDED",
+                     "WINNER_SHORT", "CANCEL_FAIL", "BURST_SHORT", "USER_ABORT",
+                     "PLACE_TIMEOUT", "BURST_NO_TICK"]
+    present = re.findall(r'AbortMachine\s*\(\s*\w+\s*,\s*"([A-Z_]+)"', src)
+    missing = [r for r in abort_reasons if r not in present]
+    check("every abort reason in doc 08 section 6 is reachable", not missing,
+          ", ".join(missing))
+    check("DONE is written", 'WritePhase(mi, "DONE", "")' in src)
+    check("only ARM_DONE/ARM_ABORTED are terminal states",
+          len(re.findall(r"arm_state\[mi\]\s*=\s*ARM_DONE", src)) == 1
+          and len(re.findall(r"arm_state\[mi\]\s*=\s*ARM_ABORTED", src)) == 1)
+
+    # Every non-terminal state must have a deadline check in ServiceArmMachines.
+    svc = src[src.index("void ServiceArmMachines()"):]
+    svc = svc[:svc.index("void RunCommand()")]
+    for state, deadline in (("ARM_PLACING", "arm_armed_deadline"),
+                            ("ARM_ARMED", "arm_armed_deadline"),
+                            ("ARM_CANCELLING", "arm_cancel_deadline"),
+                            ("ARM_BURSTING", "arm_win_deadline")):
+        # Slice between consecutive state-block starts so a self-referential
+        # condition inside the block cannot truncate it.
+        # Anchor on the block-opening indentation (6 spaces inside the for
+        # loop) so a nested self-referential condition is not treated as a
+        # new block start.
+        starts = [m.start() for m in
+                  re.finditer(r"^ {6}if\(arm_state\[i\] == ARM_", svc, re.M)]
+        seg = ""
+        for idx, st in enumerate(starts):
+            end = starts[idx + 1] if idx + 1 < len(starts) else len(svc)
+            chunk = svc[st:end]
+            if chunk.lstrip().startswith(f"if(arm_state[i] == {state})"):
+                seg = chunk
+                break
+        check(f"{state} has a deadline escape ({deadline})",
+              deadline in seg and "AbortMachine" in seg)
+
+    cancel = src[src.index("void SendCancelRemoves("):]
+    cancel = cancel[:cancel.index("void StartBurst(")]
+    check("losing-ladder cancel never touches the triggered lane",
+          "LaneOfOpposite(arm_trigger_side" in cancel
+          and "if(arm_req_lane[s][mi] != losing) continue;" in cancel)
+    check("burst fires the contingent side for the triggered scenario",
+          "arm_trigger_side[mi] == LANE_PB" in src and "lane == LANE_CS" in src
+          and "lane == LANE_CB" in src)
+    check("deals are de-duplicated by ticket",
+          "DealSeen(" in src and "MarkDeal(" in src)
+    check("a missed DEAL_ADD has a deal-history safety net",
+          "ScanRecentDeals(i);" in svc)
+    check("burst gets a retry pass before BURST_SHORT",
+          "arm_burst_pass[i] < 2" in svc)
+    check("test-only inputs exist and are wired",
+          "TestCancelDelayMs" in src and "TestUnfillableWinner" in src)
 
     print("\n" + "=" * 62)
     if FAILURES:

@@ -1,4 +1,4 @@
-#property version "1.20"
+#property version "1.30"
 #property description "Command-driven async order executor (queued-close bot)"
 
 input int InpPollMs      = 5;     // how often to look for a command file
@@ -13,7 +13,7 @@ input bool TestUnfillableWinner = false; // TEST ONLY: winner never completes
 #define CMD_FILE "wt_cmd.txt"
 #define RES_FILE "wt_res.txt"
 #define RES_TMP  "wt_res.tmp"
-#define WT_EA_VERSION "1.2"
+#define WT_EA_VERSION "1.3"
 #define LOG_FILE  "wt_ea.log"
 
 // Per-symbol phase files. The name carries the command id so a stale file from
@@ -26,11 +26,13 @@ input bool TestUnfillableWinner = false; // TEST ONLY: winner never completes
 #define ARM_SLOTS 256          // max orders per ladder; beyond this ARMLIMIT is rejected
 
 // arm machine states
-#define ARM_IDLE    0
-#define ARM_PLACING 1
-#define ARM_ARMED   2
-#define ARM_ABORTED 3
-#define ARM_DONE    4
+#define ARM_IDLE       0
+#define ARM_PLACING    1
+#define ARM_ARMED      2
+#define ARM_ABORTED    3
+#define ARM_DONE       4
+#define ARM_CANCELLING 5
+#define ARM_BURSTING   6
 
 // lanes inside a machine's request table
 #define LANE_NONE 0
@@ -85,6 +87,26 @@ string arm_pfile[MAX_ARM_MACHINES];
 double arm_lower[MAX_ARM_MACHINES];
 double arm_upper[MAX_ARM_MACHINES];
 int    arm_digits[MAX_ARM_MACHINES];
+datetime arm_start_sec[MAX_ARM_MACHINES];  // wall clock at arm, for HistorySelect
+// phase-3 state
+int    arm_fill[MAX_ARM_MACHINES][4];    // entry deals seen per lane
+bool   arm_win_done[MAX_ARM_MACHINES];
+int    arm_burst_exp[MAX_ARM_MACHINES];
+int    arm_burst_ok[MAX_ARM_MACHINES];
+int    arm_burst_sent[MAX_ARM_MACHINES];
+int    arm_burst_pass[MAX_ARM_MACHINES]; // retry passes (invalid-stops style)
+int    arm_cancel_go_at[MAX_ARM_MACHINES]; // TestCancelDelayMs
+ulong  arm_win_deadline[MAX_ARM_MACHINES];
+ulong  arm_cancel_deadline[MAX_ARM_MACHINES];
+int    arm_win_ms[MAX_ARM_MACHINES];
+int    arm_cancel_ms[MAX_ARM_MACHINES];
+bool   arm_cancel_sent[MAX_ARM_MACHINES];
+int    arm_dealscan_fail[MAX_ARM_MACHINES];
+ulong  arm_next_scan[MAX_ARM_MACHINES];
+int    arm_burst_mode_parallel[MAX_ARM_MACHINES];
+// deal de-duplication: a deal ticket is counted exactly once
+int    arm_deal_count[MAX_ARM_MACHINES];
+ulong  arm_deal_seen[ARM_SLOTS][MAX_ARM_MACHINES];
 ulong  arm_armed_deadline[MAX_ARM_MACHINES];
 ulong  arm_sweep_deadline[MAX_ARM_MACHINES];
 int    arm_exp[MAX_ARM_MACHINES][4];   // [PB, PS, CS, CB] expected
@@ -100,6 +122,14 @@ ulong  arm_t_trigger[MAX_ARM_MACHINES];
 ulong  arm_t_cancel[MAX_ARM_MACHINES];
 ulong  arm_t_burst[MAX_ARM_MACHINES];
 
+// contingent burst lines, stored at arm time and fired later (CS/CB)
+int    arm_bl_count[MAX_ARM_MACHINES];
+int    arm_bl_lane[ARM_SLOTS][MAX_ARM_MACHINES];
+double arm_bl_lot[ARM_SLOTS][MAX_ARM_MACHINES];
+double arm_bl_tp[ARM_SLOTS][MAX_ARM_MACHINES];
+double arm_bl_sl[ARM_SLOTS][MAX_ARM_MACHINES];
+string arm_bl_tag[ARM_SLOTS][MAX_ARM_MACHINES];
+
 int    arm_req_used[ARM_SLOTS][MAX_ARM_MACHINES];
 ulong  arm_req_id[ARM_SLOTS][MAX_ARM_MACHINES];
 int    arm_req_lane[ARM_SLOTS][MAX_ARM_MACHINES];
@@ -112,6 +142,8 @@ string ArmStateName(int s)
    if(s == ARM_ARMED)   return "ARMED";
    if(s == ARM_ABORTED) return "ABORTED";
    if(s == ARM_DONE)    return "DONE";
+   if(s == ARM_CANCELLING) return "CANCELLING";
+   if(s == ARM_BURSTING)   return "BURSTING";
    return "IDLE";
 }
 
@@ -134,6 +166,7 @@ void ResetArmMachine(int mi)
    arm_lower[mi]         = 0;
    arm_upper[mi]         = 0;
    arm_digits[mi]        = 8;
+   arm_start_sec[mi]     = 0;
    arm_armed_deadline[mi]= 0;
    arm_sweep_deadline[mi]= 0;
    arm_sent[mi]          = 0;
@@ -142,6 +175,23 @@ void ResetArmMachine(int mi)
    arm_both_sided[mi]    = false;
    arm_cancel_started[mi]= false;
    arm_burst_started[mi] = false;
+   for(int l = 0; l < 4; l++) arm_fill[mi][l] = 0;
+   arm_win_done[mi]      = false;
+   arm_burst_exp[mi]     = 0;
+   arm_burst_ok[mi]      = 0;
+   arm_burst_sent[mi]    = 0;
+   arm_burst_pass[mi]    = 0;
+   arm_cancel_go_at[mi]  = 0;
+   arm_win_deadline[mi]    = 0;
+   arm_cancel_deadline[mi]= 0;
+   arm_win_ms[mi]         = 0;
+   arm_cancel_ms[mi]      = 0;
+   arm_cancel_sent[mi]    = false;
+   arm_dealscan_fail[mi]  = 0;
+   arm_next_scan[mi]     = 0;
+   arm_burst_mode_parallel[mi] = 0;
+   arm_deal_count[mi]    = 0;
+   arm_bl_count[mi]      = 0;
    arm_t_arm[mi]         = 0;
    arm_t_trigger[mi]     = 0;
    arm_t_cancel[mi]      = 0;
@@ -226,8 +276,10 @@ void WritePhase(int mi, const string phase, const string reason)
    s += "expected_sell=" + IntegerToString(arm_exp[mi][1] + arm_exp[mi][3]) + "\n";
    s += "placed_pb=" + IntegerToString(arm_ok[mi][0]) + "\n";
    s += "placed_ps=" + IntegerToString(arm_ok[mi][1]) + "\n";
-   s += "placed_cs=" + IntegerToString(arm_ok[mi][2]) + "\n";
-   s += "placed_cb=" + IntegerToString(arm_ok[mi][3]) + "\n";
+   s += "placed_cs=" + IntegerToString(arm_burst_ok[mi]) + "\n";
+   s += "placed_cb=" + IntegerToString(arm_burst_ok[mi]) + "\n";
+   s += "burst_expected=" + IntegerToString(arm_burst_exp[mi]) + "\n";
+   s += "dealscan_fallbacks=" + IntegerToString(arm_dealscan_fail[mi]) + "\n";
    s += "trigger_side=" + IntegerToString(arm_trigger_side[mi]) + "\n";
    s += "t_arm_us=" + IntegerToString(t0 > 0 ? (ulong)t0 : 0) + "\n";
    s += "t_trigger_us=" + IntegerToString(arm_t_trigger[mi]) + "\n";
@@ -401,8 +453,206 @@ int SweepPendingsAllSymbols(const long mg)
 }
 
 // ---------------------------------------------------------------------------
+// Phase 3: trigger, cancel, burst (doc 08 section 7)
+// ---------------------------------------------------------------------------
+
+// Map a filled order ticket back to the lane it belongs to, using the request
+// table's resolved tickets. Returns LANE_NONE when the ticket is not ours.
+int LaneOfTicket(int mi, const ulong ticket)
+{
+   if(ticket == 0) return LANE_NONE;
+   for(int s = 0; s < ARM_SLOTS; s++)
+   {
+      if(!arm_req_used[s][mi]) continue;
+      if(arm_req_ticket[s][mi] != ticket) continue;
+      return arm_req_lane[s][mi];
+   }
+   return LANE_NONE;
+}
+
+bool DealSeen(int mi, const ulong deal)
+{
+   for(int i = 0; i < arm_deal_count[mi]; i++)
+      if(arm_deal_seen[i][mi] == deal) return true;
+   return false;
+}
+
+void MarkDeal(int mi, const ulong deal, const int lane)
+{
+   if(arm_deal_count[mi] >= ARM_SLOTS) return;
+   arm_deal_seen[arm_deal_count[mi]][mi] = deal;
+   arm_deal_count[mi]++;
+   int li = LaneIndex(lane);
+   if(li >= 0) arm_fill[mi][li]++;
+}
+
+// Count one entry deal, at most once per deal ticket. Returns the lane.
+int CountEntryDeal(int mi, const ulong deal, const ulong order)
+{
+   int lane = LaneOfTicket(mi, order);
+   if(lane == LANE_NONE) return LANE_NONE;
+   if(DealSeen(mi, deal)) return lane;
+   MarkDeal(mi, deal, lane);
+   Log("[LIMIT] fill id=" + arm_cmdid[mi] + " symbol=" + arm_symbol[mi]
+       + " lane=" + IntegerToString(lane) + " order=" + IntegerToString((long)order));
+   return lane;
+}
+
+// A remove that comes back "order not found" means that order filled or is
+// filling. Re-read deal history for this machine's window so a fill that landed
+// before the machine was watching is still caught (doc 08 section 7/9).
+void ScanRecentDeals(int mi)
+{
+   datetime from = arm_start_sec[mi] - 60;
+   if(from <= 0) from = 0;
+   if(!HistorySelect(from, TimeCurrent() + 5)) return;
+   int total = HistoryDealsTotal();
+   for(int i = 0; i < total; i++)
+   {
+      ulong dt = HistoryDealGetTicket(i);
+      if(dt == 0) continue;
+      if(HistoryDealGetInteger(DEAL_MAGIC) != arm_magic[mi]) continue;
+      if(HistoryDealGetString(DEAL_SYMBOL) != arm_symbol[mi]) continue;
+      if(HistoryDealGetInteger(DEAL_ENTRY) != DEAL_ENTRY_IN) continue;
+      ulong ot = (ulong)HistoryDealGetInteger(DEAL_ORDER);
+      CountEntryDeal(mi, dt, ot);
+   }
+}
+
+void FinishDone(int mi)
+{
+   arm_t_burst[mi] = GetMicrosecondCount();
+   arm_state[mi] = ARM_DONE;
+   arm_sweep_deadline[mi] = GetTickCount64() + ARM_SWEEP_GRACE_MS;
+   WritePhase(mi, "DONE", "");
+   Log("[LIMIT] done id=" + arm_cmdid[mi] + " symbol=" + arm_symbol[mi]
+       + " trigger_side=" + IntegerToString(arm_trigger_side[mi])
+       + " burst_ok=" + IntegerToString(arm_burst_ok[mi]));
+}
+
+void StartCancel(int mi)
+{
+   if(arm_cancel_started[mi]) return;
+   arm_cancel_started[mi] = true;
+   arm_state[mi] = ARM_CANCELLING;
+   // Test hook: widen the race window between trigger and losing-ladder remove.
+   arm_cancel_go_at[mi] = (int)(GetTickCount64() + (TestCancelDelayMs > 0 ? TestCancelDelayMs : 0));
+   // Catch anything that filled between the trigger event and this handler.
+   ScanRecentDeals(mi);
+   Log("[LIMIT] cancelling id=" + arm_cmdid[mi] + " symbol=" + arm_symbol[mi]
+       + " losing_lane=" + IntegerToString(LaneOfOpposite(arm_trigger_side[mi])));
+}
+
+int LaneOfOpposite(int lane)
+{
+   if(lane == LANE_PB) return LANE_PS;
+   if(lane == LANE_PS) return LANE_PB;
+   return LANE_NONE;
+}
+
+// Remove only the losing ladder's still-pending tickets. Never the triggered one.
+void SendCancelRemoves(int mi)
+{
+   int losing = LaneOfOpposite(arm_trigger_side[mi]);
+   int li = LaneIndex(losing);
+   if(li < 0) return;
+   int sent = 0;
+   for(int s = 0; s < ARM_SLOTS; s++)
+   {
+      if(!arm_req_used[s][mi]) continue;
+      if(arm_req_lane[s][mi] != losing) continue;
+      ulong tkt = arm_req_ticket[s][mi];
+      if(tkt == 0) continue;
+      if(!OrderSelect(tkt)) continue;
+      MqlTradeRequest rq; MqlTradeResult rs;
+      ZeroMemory(rq); ZeroMemory(rs);
+      rq.action   = TRADE_ACTION_REMOVE;
+      rq.symbol   = arm_symbol[mi];
+      rq.position = tkt;
+      rq.magic    = arm_magic[mi];
+      rq.comment  = "cancel-arm";
+      if(OrderSendAsync(rq, rs)) { ArmTrack(mi, rs.request_id, LANE_REM); arm_rem_pending[mi]++; sent++; }
+      else Log("[LIMIT] cancel remove rejected tkt=" + IntegerToString((long)tkt)
+               + " retcode=" + IntegerToString((int)rs.retcode));
+   }
+   Log("[LIMIT] cancel removes submitted=" + IntegerToString(sent));
+}
+
+void StartBurst(int mi)
+{
+   if(arm_burst_started[mi]) return;
+   arm_burst_started[mi] = true;
+   arm_state[mi] = ARM_BURSTING;
+   arm_burst_ok[mi] = 0;
+   arm_burst_sent[mi] = 0;
+   SendBurstPass(mi);
+}
+
+// One burst pass over the contingent lines for the triggered scenario.
+// Mirrors SendOpen's market path (FOK, deviation 200, price from a fresh tick).
+void SendBurstPass(int mi)
+{
+   MqlTick tk;
+   if(!SymbolInfoTick(arm_symbol[mi], tk))
+   {
+      AbortMachine(mi, "BURST_NO_TICK");
+      return;
+   }
+   for(int s = 0; s < arm_bl_count[mi]; s++)
+   {
+      int lane = arm_bl_lane[s][mi];
+      // CS fires when the BUY ladder triggered (lower level); CB when the SELL
+      // ladder triggered (upper level).
+      bool want = (arm_trigger_side[mi] == LANE_PB) ? (lane == LANE_CS)
+                                                    : (lane == LANE_CB);
+      if(!want) continue;
+
+      bool is_buy = (lane == LANE_CB);
+      MqlTradeRequest rq; MqlTradeResult rs;
+      ZeroMemory(rq); ZeroMemory(rs);
+      rq.action       = TRADE_ACTION_DEAL;
+      rq.symbol       = arm_symbol[mi];
+      rq.volume       = arm_bl_lot[s][mi];
+      rq.type         = is_buy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+      rq.price        = is_buy ? tk.ask : tk.bid;
+      rq.tp           = (arm_bl_tp[s][mi] > 0.0)
+                        ? NormalizeDouble(arm_bl_tp[s][mi], arm_digits[mi]) : 0.0;
+      rq.sl           = (arm_bl_sl[s][mi] > 0.0)
+                        ? NormalizeDouble(arm_bl_sl[s][mi], arm_digits[mi]) : 0.0;
+      rq.deviation    = 200;
+      rq.magic        = arm_magic[mi];
+      rq.type_time    = ORDER_TIME_GTC;
+      rq.type_filling = ORDER_FILLING_FOK;   // same as the OPEN market path
+      rq.comment      = arm_bl_tag[s][mi];
+
+      if(OrderSendAsync(rq, rs))
+      {
+         ArmTrack(mi, rs.request_id, is_buy ? LANE_CB : LANE_CS);
+         arm_burst_sent[mi]++;
+      }
+      else
+      {
+         Log("[LIMIT] burst send rejected tag=" + arm_bl_tag[s][mi]
+             + " retcode=" + IntegerToString((int)rs.retcode));
+      }
+   }
+}
+
+// ---------------------------------------------------------------------------
 // Arm command handlers
 // ---------------------------------------------------------------------------
+
+string HeaderString(string &lines[], int n, const string key, const string def)
+{
+   for(int i = 0; i < n; i++)
+   {
+      int eq = StringFind(lines[i], "=");
+      if(eq <= 0) continue;
+      if(StringSubstr(lines[i], 0, eq) != key) continue;
+      return StringSubstr(lines[i], eq + 1);
+   }
+   return def;
+}
 
 double HeaderDouble(string &lines[], int n, const string key, double def)
 {
@@ -419,11 +669,16 @@ double HeaderDouble(string &lines[], int n, const string key, double def)
 void HandleArmLimit(string &lines[], int n)
 {
    double armed_timeout_ms = HeaderDouble(lines, n, "armed_timeout_ms", 120000);
+   double win_fill_ms = HeaderDouble(lines, n, "win_fill_deadline_ms", 1500);
+   double cancel_ack_ms = HeaderDouble(lines, n, "cancel_ack_deadline_ms", 1500);
+   string burst_mode = HeaderString(lines, n, "burst_mode", "AFTER_CANCEL");
    double lower = HeaderDouble(lines, n, "lower", 0);
    double upper = HeaderDouble(lines, n, "upper", 0);
 
    if(armed_timeout_ms < 1000) armed_timeout_ms = 1000;
    if(armed_timeout_ms > 3600000) armed_timeout_ms = 3600000;
+   if(win_fill_ms < 100) win_fill_ms = 100;
+   if(cancel_ack_ms < 100) cancel_ack_ms = 100;
 
    if(!SymbolSelect(cur_symbol, true))
    {
@@ -473,6 +728,12 @@ void HandleArmLimit(string &lines[], int n)
    arm_digits[mi]        = digits;
    arm_armed_deadline[mi]= GetTickCount64() + (ulong)armed_timeout_ms;
    arm_t_arm[mi]         = GetMicrosecondCount();
+   arm_start_sec[mi]     = TimeCurrent();
+   arm_win_deadline[mi]  = 0;
+   arm_cancel_deadline[mi] = 0;
+   arm_burst_mode_parallel[mi] = (burst_mode == "PARALLEL") ? 1 : 0;
+   arm_win_ms[mi]      = (int)win_fill_ms;
+   arm_cancel_ms[mi]   = (int)cancel_ack_ms;
    arm_pfile[mi]         = PFX + cur_id + PFX_EXT;
 
    int placed_any = 0;
@@ -507,11 +768,29 @@ void HandleArmLimit(string &lines[], int n)
       }
 
       // PB is a buy limit at the lower level; PS is a sell limit at the upper
-      // level. CS/CB are contingent MARKET orders and are NOT placed here.
+      // level. CS/CB are contingent MARKET orders: stored now, fired later.
       if(lane == LANE_PB || lane == LANE_PS)
       {
          double price = (lane == LANE_PB) ? lower : upper;
          if(SendPending(mi, parts, lane, price, digits)) placed_any++;
+      }
+      else
+      {
+         if(arm_bl_count[mi] >= ARM_SLOTS)
+         {
+            Log("[LIMIT] ARMLIMIT rejected: " + cur_symbol + " burst lines exceed ARM_SLOTS");
+            RemovePendings(cur_symbol, cur_magic, mi);
+            ResetArmMachine(mi);
+            WriteAck(false, "TOO_MANY_ORDERS");
+            return;
+         }
+         int bi = arm_bl_count[mi]++;
+         arm_bl_lane[bi][mi] = lane;
+         arm_bl_lot[bi][mi]  = StringToDouble(parts[2]);
+         arm_bl_tp[bi][mi]   = StringToDouble(parts[3]);
+         arm_bl_sl[bi][mi]   = StringToDouble(parts[4]);
+         arm_bl_tag[bi][mi]  = parts[5];
+         arm_burst_exp[mi]++;
       }
    }
 
@@ -625,6 +904,7 @@ void CheckPlacingDone(int mi)
 // so nothing here can be gated by another symbol's in-flight batch.
 void ServiceArmMachines()
 {
+   ulong now = GetTickCount64();
    for(int i = 0; i < MAX_ARM_MACHINES; i++)
    {
       if(arm_state[i] == ARM_PLACING)
@@ -632,17 +912,121 @@ void ServiceArmMachines()
          CheckPlacingDone(i);
          // A placement request that never gets a result must not wedge the
          // machine: the armed deadline doubles as the placement deadline.
-         if(arm_state[i] == ARM_PLACING && GetTickCount64() >= arm_armed_deadline[i])
+         if(arm_state[i] == ARM_PLACING && now >= arm_armed_deadline[i])
             AbortMachine(i, "PLACE_TIMEOUT");
          continue;
       }
 
+      // Safety net for a missed or mis-classified DEAL_ADD: re-read deal
+      // history periodically once the machine is live. Rate-limited because
+      // the poll runs every few milliseconds.
+      if(now >= arm_next_scan[i])
+      {
+         ScanRecentDeals(i);
+         arm_next_scan[i] = now + 250;
+      }
+
       if(arm_state[i] == ARM_ARMED)
       {
-         // No trigger logic yet (phase 3): any fill here is deliberately not
-         // acted on. The armed timeout still fires and sweeps.
-         if(GetTickCount64() >= arm_armed_deadline[i])
+         int pbf = arm_fill[i][LaneIndex(LANE_PB)];
+         int psf = arm_fill[i][LaneIndex(LANE_PS)];
+         if(pbf > 0 || psf > 0)
+         {
+            // A fill seen only through the history scan still triggers.
+            BeginTrigger(i, (pbf > 0) ? LANE_PB : LANE_PS);
+            continue;
+         }
+         if(now >= arm_armed_deadline[i])
             AbortMachine(i, "ARM_TIMEOUT");
+         continue;
+      }
+
+      if(arm_state[i] == ARM_CANCELLING)
+      {
+         // Issue the losing-ladder removes once the test delay (if any) passed.
+         if(!arm_cancel_sent[i] && now >= arm_cancel_go_at[i])
+         {
+            arm_cancel_sent[i] = true;
+            SendCancelRemoves(i);
+         }
+
+         // A losing-ladder fill at ANY point before the burst means both sides
+         // are in: do not burst, remove everything.
+         int li = LaneIndex(LaneOfOpposite(arm_trigger_side[i]));
+         if(li >= 0 && arm_fill[i][li] > 0)
+         {
+            AbortMachine(i, "BOTH_SIDED");
+            continue;
+         }
+
+         // Winner must have finished filling.
+         int wi = LaneIndex(arm_trigger_side[i]);
+         if(wi >= 0 && arm_fill[i][wi] >= arm_exp[i][wi]) arm_win_done[i] = true;
+
+         // Burst only after the winning ladder is complete AND the losing
+         // ladder's removes have all resolved (AFTER_CANCEL).
+         if(arm_win_done[i] && arm_rem_pending[i] <= 0)
+         {
+            // "Order not found" on a remove means that order may have filled,
+            // so confirm against deals before bursting (doc 08 section 9).
+            ScanRecentDeals(i);
+            int lo = LaneIndex(LaneOfOpposite(arm_trigger_side[i]));
+            if(lo >= 0 && arm_fill[i][lo] > 0)
+            {
+               AbortMachine(i, "BOTH_SIDED");
+               continue;
+            }
+            arm_t_cancel[i] = GetMicrosecondCount();
+            StartBurst(i);
+            continue;
+         }
+
+         if(arm_cancel_deadline[i] > 0 && now >= arm_cancel_deadline[i]
+            && arm_rem_pending[i] > 0)
+         {
+            AbortMachine(i, "CANCEL_FAIL");
+            continue;
+         }
+         // Winner not complete in time -> the price bounced.
+         if(arm_win_deadline[i] > 0 && !arm_win_done[i] && now >= arm_win_deadline[i])
+         {
+            AbortMachine(i, "WINNER_SHORT");
+            continue;
+         }
+         continue;
+      }
+
+      if(arm_state[i] == ARM_BURSTING)
+      {
+         int wi = LaneIndex(arm_trigger_side[i]);
+         if(wi >= 0 && arm_fill[i][wi] >= arm_exp[i][wi]) arm_win_done[i] = true;
+
+         if(arm_burst_sent[i] > 0) continue;   // still waiting on burst replies
+
+         bool burst_ok = arm_burst_ok[i] >= arm_burst_exp[i];
+         if(!burst_ok && arm_burst_pass[i] < 2)
+         {
+            // One retry pass, mirroring the OPEN path's invalid-stops retry.
+            arm_burst_pass[i]++;
+            Log("[LIMIT] burst retry pass=" + IntegerToString(arm_burst_pass[i])
+                + " ok=" + IntegerToString(arm_burst_ok[i])
+                + "/" + IntegerToString(arm_burst_exp[i]));
+            SendBurstPass(i);
+            continue;
+         }
+
+         if(!arm_win_done[i])
+         {
+            if(arm_win_deadline[i] > 0 && now >= arm_win_deadline[i])
+            {
+               AbortMachine(i, "WINNER_SHORT");
+               continue;
+            }
+            continue;   // burst done, waiting on the winner; deadline applies
+         }
+
+         if(burst_ok) FinishDone(i);
+         else AbortMachine(i, "BURST_SHORT");
          continue;
       }
 
@@ -650,7 +1034,7 @@ void ServiceArmMachines()
       {
          // Release the machine once its removes have resolved, or force-release
          // after the grace period so a stuck request cannot wedge a symbol.
-         if(arm_rem_pending[i] <= 0 || GetTickCount64() >= arm_sweep_deadline[i])
+         if(arm_rem_pending[i] <= 0 || now >= arm_sweep_deadline[i])
          {
             Log("[LIMIT] machine released id=" + arm_cmdid[i] + " symbol=" + arm_symbol[i]
                 + " rem_pending=" + IntegerToString(arm_rem_pending[i]));
@@ -658,6 +1042,45 @@ void ServiceArmMachines()
          }
          continue;
       }
+   }
+}
+
+// Shared trigger entry point, used both by the DEAL_ADD event and by the
+// periodic deal-history safety net in ServiceArmMachines.
+void BeginTrigger(int mi, const int lane)
+{
+   if(arm_trigger_side[mi] != 0) return;
+   arm_trigger_side[mi] = lane;
+   arm_t_trigger[mi]   = GetMicrosecondCount();
+   // Both deadlines start on the FIRST fill, not at arming.
+   arm_win_deadline[mi]    = GetTickCount64() + (ulong)arm_win_ms[mi];
+   arm_cancel_deadline[mi] = GetTickCount64() + (ulong)arm_cancel_ms[mi];
+   WritePhase(mi, "TRIGGERED", "");
+   Log("[LIMIT] triggered id=" + arm_cmdid[mi] + " symbol=" + arm_symbol[mi]
+       + " side=" + IntegerToString(lane));
+   if(arm_burst_mode_parallel[mi]) StartBurst(mi);
+   else StartCancel(mi);
+}
+
+// First entry deal for the machine's magic: which ladder is this?
+// Never cancels the triggered ladder; drives the next state instead.
+void ArmOnEntryDeal(int mi, const ulong deal, const ulong order)
+{
+   int lane = CountEntryDeal(mi, deal, order);
+   if(lane == LANE_NONE) return;
+   if(lane != LANE_PB && lane != LANE_PS) return;
+
+   if(arm_trigger_side[mi] == 0)
+   {
+      BeginTrigger(mi, lane);
+      return;
+   }
+
+   if(arm_state[mi] == ARM_ARMED || arm_state[mi] == ARM_CANCELLING)
+   {
+      // Second ladder filled before the burst: both sides are in.
+      if(lane != arm_trigger_side[mi])
+         AbortMachine(mi, "BOTH_SIDED");
    }
 }
 
@@ -840,6 +1263,10 @@ void OnTradeTransaction(const MqlTradeTransaction &t,
                {
                   if(arm_rem_pending[mi] > 0) arm_rem_pending[mi]--;
                }
+               else if(lane == LANE_CS || lane == LANE_CB)
+               {
+                  arm_burst_ok[mi]++;   // contingent market burst resolved
+               }
                else
                {
                   int li = LaneIndex(lane);
@@ -853,9 +1280,40 @@ void OnTradeTransaction(const MqlTradeTransaction &t,
                if(lane == LANE_REM && arm_rem_pending[mi] > 0) arm_rem_pending[mi]--;
             }
             if(arm_sent[mi] > 0) arm_sent[mi]--;
+            if(arm_burst_sent[mi] > 0 && (lane == LANE_CS || lane == LANE_CB))
+               arm_burst_sent[mi]--;
             break;
          }
          return;
+      }
+   }
+
+   // Entry fills for an armed ladder: the trigger itself. Scoped by
+   // symbol+magic so an unrelated deal on another symbol never wakes a machine.
+   if(t.type == TRADE_TRANSACTION_DEAL_ADD && t.order > 0)
+   {
+      for(int mi = 0; mi < MAX_ARM_MACHINES; mi++)
+      {
+         if(arm_state[mi] == ARM_IDLE) continue;
+         if(t.symbol != arm_symbol[mi]) continue;
+         if(t.magic != arm_magic[mi]) continue;
+         // The deal must be an ENTRY. HistoryDealSelect inside the transaction
+         // handler is unverified on this broker, so fall back to counting it
+         // when the lookup fails (a DEAL_ADD for a tracked pending ladder order
+         // can only be that ladder filling) and count the fallbacks.
+         bool is_entry = true;
+         if(HistoryDealSelect(t.deal))
+         {
+            if(HistoryDealGetInteger(DEAL_ENTRY) != DEAL_ENTRY_IN) is_entry = false;
+         }
+         else
+         {
+            arm_dealscan_fail[mi]++;
+            Log("[LIMIT] HistoryDealSelect failed for deal " + IntegerToString((long)t.deal)
+                + " (fallbacks so far: " + IntegerToString(arm_dealscan_fail[mi]) + ")");
+         }
+         if(is_entry) ArmOnEntryDeal(mi, t.deal, t.order);
+         break;
       }
    }
 
