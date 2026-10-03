@@ -708,9 +708,46 @@ class QueuedCloseStrategyEngine:
             f"EA bulk open: {len(tickets)} positions opened in one batch")
         return True
 
+    def _record_open_quality(self, tickets: Dict[str, Tuple[int, float]],
+                             mode: str, phase: Optional[dict] = None,
+                             trigger_side: str = "n/a") -> None:
+        """Append one open_quality.csv row for this open, in BOTH modes.
+
+        Called from the shared post-open routine so burst and limit_trigger
+        are measured the same way and the comparison is like-for-like. Reads
+        the just-opened positions back from the broker rather than reusing
+        the in-memory entries, because the metrics are about what the broker
+        actually filled.
+
+        Additive to burst mode and fully defensive: the only effect on an
+        existing burst open is one extra read-only positions_get after the
+        open has already completed, and any failure is logged and dropped.
+        """
+        try:
+            from core import open_quality
+            info = mt5.symbol_info(self.mt5_symbol)
+            digits = int(getattr(info, "digits", 5)) if info else 5
+            filled = [p for p in
+                      (mt5.positions_get(symbol=self.mt5_symbol) or [])
+                      if p.magic == self.MAGIC_NUMBER
+                      and p.ticket in {t for t, _ in tickets.values()}]
+            open_quality.record_open(
+                self.user_id, self.mt5_symbol, mode, filled, digits=digits,
+                phase=phase, trigger_side=trigger_side,
+                entry_offset=(self.state.entry_offset
+                              if mode == "limit_trigger" else None),
+                log=self.activity_log)
+        except Exception as e:
+            # Metrics must never break the open that just succeeded.
+            self.activity_log.log_error(
+                f"[QUALITY] open_quality.csv row skipped: {e}")
+
     async def _register_open_positions(self, orders: List[dict],
                                        tickets: Dict[str, Tuple[int, float]],
-                                       moving_leg: str, constant_leg: str):
+                                       moving_leg: str, constant_leg: str,
+                                       quality_mode: str = "burst",
+                                       quality_phase: Optional[dict] = None,
+                                       quality_side: str = "n/a"):
         """Shared post-open routine (doc 08 section 8).
 
         Registers opened positions into the engine's existing tracking,
@@ -719,6 +756,9 @@ class QueuedCloseStrategyEngine:
 
         `orders` entries carry "tag", "slot", "kind" and "lot"; `tickets` maps
         tag -> (ticket, entry) as verified against positions_get.
+
+        The quality_* arguments are metrics-only and default to burst with no
+        EA stamps, which is exactly what a burst open has.
         """
         repo = await self._ensure_repository_async()
         by_tag = {o["tag"]: o for o in orders}
@@ -755,6 +795,10 @@ class QueuedCloseStrategyEngine:
                     self.activity_log.log_fire(
                         self.state.cycle_count, constant_leg, entry,
                         order["lot"], 0.0, 0.0, ticket)
+
+        # One metrics row per successful open, in either mode (doc 08 §8).
+        self._record_open_quality(tickets, quality_mode, quality_phase,
+                                  quality_side)
 
     # ------------------------------------------------------------------
     # Limit-trigger open path (doc 08 sections 5, 8 and 9)
@@ -922,6 +966,58 @@ class QueuedCloseStrategyEngine:
              "price": t.price, "fired": False}
             for t in self.state.up_targets + self.state.down_targets])
 
+    def _log_limit_phase(self, d: dict) -> None:
+        """One readable [LIMIT] line per EA phase, with the counts and timings
+        that phase actually reported (doc 08 section 8).
+
+        The EA's own journal already has the raw line; this is the copy that
+        lands in the per-symbol activity log next to the rest of the cycle, so
+        an armed symbol's whole story is in one file. Only keys the EA actually
+        wrote are printed -- a missing stamp stays absent rather than being
+        rendered as a zero, which would read as "instantaneous".
+        """
+        phase = d.get("phase", "?")
+        reason = d.get("reason", "")
+        parts = [f"[LIMIT] {phase}"]
+
+        if phase in ("ARMED", "TRIGGERED", "DONE", "ABORT"):
+            parts.append(f"lower={d.get('lower', '')} upper={d.get('upper', '')}")
+        if phase == "ARMED":
+            parts.append(f"placed {d.get('placed_pb', '?')} buy / "
+                         f"{d.get('placed_ps', '?')} sell limits "
+                         f"(expected {d.get('expected_buy', '?')} / "
+                         f"{d.get('expected_sell', '?')})")
+        if phase in ("TRIGGERED", "DONE", "ABORT"):
+            side = d.get("trigger_side", "0")
+            parts.append(f"trigger_side={side}"
+                         + (" (lower)" if side == "1"
+                            else " (upper)" if side == "0" else " (none)"))
+        if phase in ("DONE", "ABORT"):
+            # ms since the trigger, straight off the EA's own clock.
+            t_trig = int(d.get("t_trigger_us") or 0)
+            for key, label in (("t_cancel_us", "cancel_done"),
+                               ("t_burst_us", "burst_done")):
+                raw = d.get(key)
+                if raw and t_trig:
+                    parts.append(f"{label}=+{(int(raw) - t_trig) / 1000.0:.1f}ms")
+        if phase == "DONE":
+            parts.append(f"burst_ok={d.get('placed_cs', '?')}/"
+                         f"{d.get('burst_expected', '?')}")
+        if d.get("elapsed_ms"):
+            parts.append(f"elapsed={d['elapsed_ms']}ms")
+        if d.get("dealscan_fallbacks"):
+            # Non-zero means the safety net had to recover a fill the event
+            # stream missed: worth knowing, not worth alarming about.
+            parts.append(f"dealscan_fallbacks={d['dealscan_fallbacks']}")
+        if reason:
+            parts.append(f"reason={reason}")
+
+        line = " ".join(parts)
+        if phase == "ABORT":
+            self.activity_log.log_error(line)
+        else:
+            self.activity_log.log_info(line)
+
     async def _limit_open_once(self, moving_leg: str, constant_leg: str):
         """One full limit open attempt.
 
@@ -1003,8 +1099,7 @@ class QueuedCloseStrategyEngine:
                 cancel_ack_deadline_ms=self.state.cancel_ack_deadline_ms,
                 burst_mode=self.state.burst_mode,
                 cmd_id=cmd_id,
-                on_phase=lambda d: self.activity_log.log_info(
-                    f"[LIMIT] {d.get('phase')} {d.get('reason', '')}".strip()))
+                on_phase=self._log_limit_phase)
         except Exception as e:
             self._limit_armed = False
             return "FAIL", f"ARM_ERROR: {e}"
@@ -1051,7 +1146,10 @@ class QueuedCloseStrategyEngine:
 
         # 9. Shared post-open -- the same routine the burst branch calls.
         await self._register_open_positions(plan["lines"], tickets, moving_leg,
-                                           constant_leg)
+                                           constant_leg,
+                                           quality_mode="limit_trigger",
+                                           quality_phase=phase,
+                                           quality_side=triggered)
         self.activity_log.log_info(
             f"[LIMIT] open complete: {len(tickets)} positions registered")
         return "OK", None

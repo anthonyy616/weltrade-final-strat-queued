@@ -468,6 +468,7 @@
         let updateInterval = null;
         let sessionToken = null;
         let lastRunningState = false;
+        let lastArmedState = false;
         // Session timer state
         let sessionStartTs = null;
         let sessionTimerInterval = null;
@@ -840,6 +841,10 @@
             // Display internal state
             const stateLabel = document.getElementById('cycle-state');
             if (status.is_resetting) stateLabel.textContent = "Resetting...";
+            // Armed wins over Active: while a ladder is waiting on its trigger
+            // there is nothing to manage yet, and saying "Active" would hide
+            // the one fact that matters (we are waiting, not working).
+            else if (status.armed) stateLabel.textContent = "Armed - waiting for trigger";
             else if (status.running) stateLabel.textContent = `Active (Iteration ${status.iteration})`;
             else stateLabel.textContent = "Idle";
 
@@ -857,13 +862,27 @@
                 if (lastRunningState !== 'stopping') log("Graceful stop in progress - completing open positions...");
                 lastRunningState = 'stopping';
             } else if (status.running) {
-                statusBadge.innerHTML = '<div class="h-2 w-2 rounded-full bg-green-400 animate-pulse"></div> Active';
-                statusBadge.className = "flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-green-500/10 text-green-500 border border-green-500/20";
+                // Amber while armed: still running and still stoppable, but the
+                // ladder is parked waiting for price rather than managed.
+                const armed = status.armed;
+                statusBadge.innerHTML = armed
+                    ? '<div class="h-2 w-2 rounded-full bg-amber-400 animate-pulse"></div> Armed'
+                    : '<div class="h-2 w-2 rounded-full bg-green-400 animate-pulse"></div> Active';
+                statusBadge.className = armed
+                    ? "flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-500 border border-amber-500/20"
+                    : "flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-green-500/10 text-green-500 border border-green-500/20";
                 toggleBtn.textContent = "Stop Bot";
                 toggleBtn.className = "px-4 py-1.5 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded";
                 toggleBtn.disabled = false;
                 if (lastRunningState !== true) log(`Bot Running. Step ${status.step}`);
                 lastRunningState = true;
+                // Say it once on the transition into armed, not every poll.
+                if (status.armed && lastArmedState !== true) {
+                    log("Limit ladder armed - waiting for trigger.");
+                    lastArmedState = true;
+                } else if (!status.armed) {
+                    lastArmedState = false;
+                }
             } else {
                 statusBadge.innerHTML = '<div class="h-2 w-2 rounded-full bg-slate-400"></div> Offline';
                 statusBadge.className = "flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-slate-200 text-slate-500 dark:bg-slate-800 dark:text-slate-400";

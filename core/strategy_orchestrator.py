@@ -310,6 +310,7 @@ class StrategyOrchestrator:
                 "step": 0,
                 "iteration": 0,
                 "is_resetting": False,
+                "armed": False,
                 "strategies": {}
             }
 
@@ -318,6 +319,10 @@ class StrategyOrchestrator:
         running_any = False
         is_resetting_any = False
         graceful_stop_any = False
+        # Armed ladders are reported per symbol; the top-level flag is true
+        # when ANY symbol is waiting on its trigger, so the UI can say so
+        # without having to know which symbol it is.
+        armed_any = False
         per_symbol_status = {}
         
         for symbol, bot in self.strategies.items():
@@ -330,6 +335,8 @@ class StrategyOrchestrator:
                 is_resetting_any = True
             if s.get('graceful_stop', False):
                 graceful_stop_any = True
+            if s.get('armed', False):
+                armed_any = True
         
         # For backward compatibility, use first bot for single-value fields
         first_bot = list(self.strategies.values())[0] if self.strategies else None
@@ -349,6 +356,7 @@ class StrategyOrchestrator:
             "step": first_status.get('step', 0),
             "iteration": first_status.get('iteration', 0),
             "is_resetting": is_resetting_any,
+            "armed": armed_any,
             "moving_total": moving_total,
             "constant_total": constant_total,
             "moving_closed": moving_closed,
