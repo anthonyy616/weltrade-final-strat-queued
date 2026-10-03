@@ -1,4 +1,5 @@
 import json
+import math
 import os
 from typing import Dict, Any, List, Optional
 
@@ -23,6 +24,18 @@ MAX_POSITION_COUNT = 500
 
 CONSTANT_SIDES = ("buy", "sell")
 
+# Open mode (doc 08 §4). "burst" stays the default; an unrecognised value degrades
+# to "burst", never to "limit_trigger" — a typo must not silently arm a new mode.
+OPEN_MODES = ("burst", "limit_trigger")
+
+# Burst timing for the limit_trigger mode (doc 08 §4).
+BURST_MODES = ("AFTER_CANCEL", "PARALLEL")
+
+# Ranges for the global limit-trigger settings (doc 08 §4).
+ARMED_TIMEOUT_RANGE = (10, 3600)
+MS_DEADLINE_RANGE = (100, 60000)
+MAX_FAILURES_RANGE = (1, 100)
+
 # Old Grid Bounce fields, removed entirely for this fork (agent/02 architecture §3)
 REMOVED_CONFIG_FIELDS = [
     "tp_pips", "sl_pips",
@@ -46,6 +59,24 @@ def get_default_symbol_config() -> Dict[str, Any]:
         "grid_distance": 50.0,
         "moving_freq": 10.0,
         "constant_freq": 8.0,
+        # Limit-trigger open mode (doc 08 §4). entry_offset is in price units,
+        # the same unit as grid_distance; the stops/spread floor is applied at
+        # arm time, not here.
+        "open_mode": "burst",
+        "entry_offset": 50.0,
+    }
+
+
+def get_default_global_config() -> Dict[str, Any]:
+    """Global defaults. max_runtime_minutes is the existing engine timer; the
+    rest are the limit-trigger knobs from doc 08 §4."""
+    return {
+        "max_runtime_minutes": 0,
+        "armed_timeout_seconds": 120,
+        "win_fill_deadline_ms": 1500,
+        "cancel_ack_deadline_ms": 1500,
+        "burst_mode": "AFTER_CANCEL",
+        "max_consecutive_open_failures": 3,
     }
 
 
@@ -109,6 +140,9 @@ class ConfigManager:
 
     def _normalize_config(self):
         """Ensure every symbol entry has the full new schema and no removed fields."""
+        # Globals first: a config file written before the limit-trigger fields
+        # existed must still normalise to a complete global block.
+        self._validate_global_fields()
         for symbol in list(self.config.get("symbols", {}).keys()):
             sym = self.config["symbols"][symbol]
             # Strip Grid Bounce fields entirely — presence invites misuse
@@ -119,6 +153,69 @@ class ConfigManager:
                 if field not in sym:
                     sym[field] = default
             self._validate_symbol_fields(symbol)
+
+    def _validate_global_fields(self) -> List[str]:
+        """Validate/clamp the global settings in place. Returns list of warnings.
+
+        Uses the same clamp-and-warn policy as the per-symbol fields (doc 08 §4):
+        a bad value is corrected and reported, never silently accepted.
+        """
+        if not isinstance(self.config.get("global"), dict):
+            self.config["global"] = get_default_global_config()
+            return []
+
+        warnings: List[str] = []
+        defaults = get_default_global_config()
+        gbl = self.config["global"]
+
+        # Fill any key missing from an older config file with its default.
+        for field, default in defaults.items():
+            if field not in gbl:
+                gbl[field] = default
+
+        # max_runtime_minutes: 0 means "no timeout" — keep 0 valid.
+        try:
+            val = int(float(gbl.get("max_runtime_minutes", 0)))
+            gbl["max_runtime_minutes"] = max(0, val)
+        except (TypeError, ValueError):
+            warnings.append(
+                f"invalid max_runtime_minutes, reset to {defaults['max_runtime_minutes']}")
+            gbl["max_runtime_minutes"] = defaults["max_runtime_minutes"]
+
+        # Integer-with-range helper shared by the three numeric limit settings.
+        def _int_in_range(field: str, rng: tuple) -> None:
+            try:
+                val = int(float(gbl.get(field)))
+            except (TypeError, ValueError):
+                warnings.append(
+                    f"invalid {field}, reset to default {defaults[field]}")
+                gbl[field] = defaults[field]
+                return
+            lo, hi = rng
+            if val < lo:
+                warnings.append(f"{field}={val} below minimum {lo}, clamped")
+                val = lo
+            elif val > hi:
+                warnings.append(f"{field}={val} above maximum {hi}, clamped")
+                val = hi
+            gbl[field] = val
+
+        _int_in_range("armed_timeout_seconds", ARMED_TIMEOUT_RANGE)
+        _int_in_range("win_fill_deadline_ms", MS_DEADLINE_RANGE)
+        _int_in_range("cancel_ack_deadline_ms", MS_DEADLINE_RANGE)
+        _int_in_range("max_consecutive_open_failures", MAX_FAILURES_RANGE)
+
+        # burst_mode: strict whitelist, degrade to the safe default.
+        mode = gbl.get("burst_mode")
+        if mode not in BURST_MODES:
+            warnings.append(
+                f"invalid burst_mode '{mode}' (must be "
+                f"{' or '.join(BURST_MODES)}), reset to AFTER_CANCEL")
+            gbl["burst_mode"] = "AFTER_CANCEL"
+
+        for w in warnings:
+            print(f"[CONFIG] global: {w}")
+        return warnings
 
     def _validate_symbol_fields(self, symbol: str) -> List[str]:
         """Validate/clamp all new fields in place. Returns list of warnings."""
@@ -181,6 +278,32 @@ class ConfigManager:
             if sym["constant_freq"] <= 0:
                 sym["constant_freq"] = get_default_symbol_config()["constant_freq"]
 
+        # open_mode: strict whitelist. An unknown value degrades to "burst" —
+        # never to "limit_trigger" (doc 08 §4).
+        mode = sym.get("open_mode")
+        if mode not in OPEN_MODES:
+            warnings.append(
+                f"invalid open_mode '{mode}' (must be 'burst' or 'limit_trigger'), "
+                "reset to burst"
+            )
+            sym["open_mode"] = "burst"
+
+        # entry_offset: must be a usable positive, finite price distance. The
+        # stops/spread floor is applied at arm time regardless of what is
+        # stored here.
+        try:
+            offset = float(sym.get("entry_offset"))
+        except (TypeError, ValueError):
+            offset = None
+        if offset is None or not math.isfinite(offset) or offset <= 0:
+            warnings.append(
+                f"invalid entry_offset {sym.get('entry_offset')!r}, reset to "
+                f"default {get_default_symbol_config()['entry_offset']}"
+            )
+            sym["entry_offset"] = get_default_symbol_config()["entry_offset"]
+        else:
+            sym["entry_offset"] = offset
+
         for w in warnings:
             print(f"[CONFIG] {symbol}: {w}")
         return warnings
@@ -200,6 +323,7 @@ class ConfigManager:
         if "global" in new_config:
             global_updates = dict(new_config["global"])
             self.config["global"].update(global_updates)
+            self._validate_global_fields()
 
         if "symbols" in new_config:
             for symbol, sym_cfg in new_config["symbols"].items():
@@ -245,9 +369,7 @@ class ConfigManager:
     def _get_defaults(self) -> Dict[str, Any]:
         """Generate default multi-asset config structure"""
         return {
-            "global": {
-                "max_runtime_minutes": 0
-            },
+            "global": get_default_global_config(),
             "symbols": {
                 symbol: get_default_symbol_config()
                 for symbol in AVAILABLE_SYMBOLS

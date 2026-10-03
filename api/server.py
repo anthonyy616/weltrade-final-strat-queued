@@ -106,11 +106,22 @@ class SymbolConfig(BaseModel):
     grid_distance: Optional[float] = None
     moving_freq: Optional[float] = None
     constant_freq: Optional[float] = None
+    # Limit-trigger open mode (doc 08 §4). Declared here explicitly because
+    # Pydantic silently drops unknown keys, so a missing field here means the
+    # value never reaches ConfigManager.
+    open_mode: Optional[str] = None
+    entry_offset: Optional[float] = None
 
 class GlobalConfig(BaseModel):
     """Global settings"""
     max_runtime_minutes: Optional[int] = None
     volatility_tolerance: Optional[str] = None  # accepted but unused in this fork
+    # Limit-trigger globals (doc 08 §4)
+    armed_timeout_seconds: Optional[int] = None
+    win_fill_deadline_ms: Optional[int] = None
+    cancel_ack_deadline_ms: Optional[int] = None
+    burst_mode: Optional[str] = None
+    max_consecutive_open_failures: Optional[int] = None
 
 class ConfigUpdate(BaseModel):
     """Multi-asset config update payload"""

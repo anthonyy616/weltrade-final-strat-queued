@@ -353,6 +353,37 @@
                             <div class="col-span-2 text-right">
                                 <div id="autosave-status" class="text-[9px] text-slate-500 hidden">Saved ✓</div>
                             </div>
+                            <!-- Limit-trigger global settings (doc 08 §4) -->
+                            <div class="col-span-2 text-[10px] font-bold text-purple-500 uppercase tracking-wider border-t border-slate-600 pt-2">Limit-Trigger</div>
+                            <div>
+                                <label class="block text-[10px] text-gray-500 dark:text-gray-400 mb-0.5">Armed Timeout (s)</label>
+                                <input type="number" id="armed_timeout_seconds" value="120" min="10" max="3600" oninput="scheduleAutoSave()"
+                                    class="w-full p-1.5 text-sm rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] text-gray-500 dark:text-gray-400 mb-0.5">Burst Timing</label>
+                                <select id="burst_mode" onchange="scheduleAutoSave()"
+                                    class="w-full p-1.5 text-sm rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                    <option value="AFTER_CANCEL">AFTER_CANCEL</option>
+                                    <option value="PARALLEL">PARALLEL</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-[10px] text-gray-500 dark:text-gray-400 mb-0.5">Win Fill (ms)</label>
+                                <input type="number" id="win_fill_deadline_ms" value="1500" min="100" max="60000" oninput="scheduleAutoSave()"
+                                    class="w-full p-1.5 text-sm rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] text-gray-500 dark:text-gray-400 mb-0.5">Cancel Ack (ms)</label>
+                                <input type="number" id="cancel_ack_deadline_ms" value="1500" min="100" max="60000" oninput="scheduleAutoSave()"
+                                    class="w-full p-1.5 text-sm rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                            </div>
+                            <div class="col-span-2">
+                                <label class="block text-[10px] text-gray-500 dark:text-gray-400 mb-0.5">Max Consecutive Open Failures</label>
+                                <input type="number" id="max_consecutive_open_failures" value="3" min="1" max="100" oninput="scheduleAutoSave()"
+                                    class="w-full p-1.5 text-sm rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                            </div>
+                            <div class="col-span-2 text-[9px] text-slate-500">Only used by symbols set to Limit Trigger open mode. Burst is unaffected.</div>
                         </div>
                     </div>
 
@@ -651,6 +682,9 @@
             for (const targetSymbol of (targetSymbols || [])) {
                 if (targetSymbol === sourceSymbol) continue;
                 if (!currentConfig.symbols[targetSymbol]) continue;
+                // Copy Lot Setup deliberately does NOT copy open_mode or
+                // entry_offset (doc 08 §4) — they are per-symbol tuning, not part of
+                // a lot setup. Keep them off this list.
                 for (const field of ['buy_count','sell_count','buy_lot','sell_lot','constant_side','grid_distance','moving_freq','constant_freq']) {
                     if (sourceConfig[field] !== undefined) currentConfig.symbols[targetSymbol][field] = sourceConfig[field];
                 }
@@ -1105,9 +1139,31 @@
             if (cfg) {
                 currentConfig = cfg;
                 renderAssetSettings();
+                applyGlobalSettings(cfg.global);
             } else {
                 log("Could not load configuration.");
             }
+        }
+
+        function applyGlobalSettings(gbl) {
+            // Populate the global inputs from config on load.
+            //
+            // max_runtime_minutes was NEVER populated from config before this
+            // change, so buildConfigPayload() read the untouched "0" back and every
+            // auto-save silently cleared the session timer. It is set here too
+            // because it sits in the same block as the limit-trigger globals.
+            if (!gbl) return;
+            const setNum = (id, val, fallback) => {
+                const el = document.getElementById(id);
+                if (el) el.value = (val === undefined || val === null) ? fallback : val;
+            };
+            setNum('max_runtime_minutes', gbl.max_runtime_minutes, 0);
+            setNum('armed_timeout_seconds', gbl.armed_timeout_seconds, 120);
+            setNum('win_fill_deadline_ms', gbl.win_fill_deadline_ms, 1500);
+            setNum('cancel_ack_deadline_ms', gbl.cancel_ack_deadline_ms, 1500);
+            setNum('max_consecutive_open_failures', gbl.max_consecutive_open_failures, 3);
+            const bm = document.getElementById('burst_mode');
+            if (bm) bm.value = gbl.burst_mode === 'PARALLEL' ? 'PARALLEL' : 'AFTER_CANCEL';
         }
 
         async function saveConfigPayload(payload) {
@@ -1138,6 +1194,7 @@
                     return Number.isFinite(v) ? v : fallback;
                 };
                 const sideEl = document.getElementById(`sym_${safe}_constant_side`);
+                const modeEl = document.getElementById(`sym_${safe}_open_mode`);
                 symbols[symbol] = {
                     enabled: true,
                     buy_count: readNum(`sym_${safe}_buy_count`, cfg.buy_count),
@@ -1148,12 +1205,25 @@
                     grid_distance: readNum(`sym_${safe}_grid_distance`, cfg.grid_distance),
                     moving_freq: readNum(`sym_${safe}_moving_freq`, cfg.moving_freq),
                     constant_freq: readNum(`sym_${safe}_constant_freq`, cfg.constant_freq),
+                    open_mode: modeEl ? modeEl.value : (cfg.open_mode || 'burst'),
+                    entry_offset: readNum(`sym_${safe}_entry_offset`, cfg.entry_offset ?? 50),
                 };
             }
-            const maxRuntimeEl = document.getElementById('max_runtime_minutes');
-            const maxRuntime = parseInt(maxRuntimeEl?.value, 10);
+            const readGlobalInt = (id, fallback) => {
+                const el = document.getElementById(id);
+                const v = parseInt(el?.value, 10);
+                return Number.isFinite(v) ? v : fallback;
+            };
+            const burstModeEl = document.getElementById('burst_mode');
             return {
-                global: { max_runtime_minutes: Number.isFinite(maxRuntime) ? maxRuntime : 0 },
+                global: {
+                    max_runtime_minutes: readGlobalInt('max_runtime_minutes', 0),
+                    armed_timeout_seconds: readGlobalInt('armed_timeout_seconds', 120),
+                    win_fill_deadline_ms: readGlobalInt('win_fill_deadline_ms', 1500),
+                    cancel_ack_deadline_ms: readGlobalInt('cancel_ack_deadline_ms', 1500),
+                    burst_mode: burstModeEl ? burstModeEl.value : 'AFTER_CANCEL',
+                    max_consecutive_open_failures: readGlobalInt('max_consecutive_open_failures', 3),
+                },
                 symbols: symbols
             };
         }
@@ -1217,6 +1287,19 @@
                         <div>
                             <label class="block text-[10px] text-gray-500 mb-0.5">Constant Freq (s)</label>
                             <input type="number" step="0.1" id="sym_${safe}_constant_freq" value="${cfg.constant_freq ?? 8}" min="0.1" oninput="scheduleAutoSave()" onfocus="setLastInteracted('${symbol}', '${safe}')"
+                                class="w-full p-1.5 text-sm rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-[10px] text-gray-500 mb-0.5">Open Mode</label>
+                            <select id="sym_${safe}_open_mode" onchange="scheduleAutoSave()"
+                                class="w-full p-1.5 text-sm rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                <option value="burst" ${cfg.open_mode !== 'limit_trigger' ? 'selected' : ''}>BURST</option>
+                                <option value="limit_trigger" ${cfg.open_mode === 'limit_trigger' ? 'selected' : ''}>LIMIT TRIGGER</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-[10px] text-gray-500 mb-0.5">Entry Offset</label>
+                            <input type="number" step="0.1" id="sym_${safe}_entry_offset" value="${cfg.entry_offset ?? 50}" min="0.1" oninput="scheduleAutoSave()" onfocus="setLastInteracted('${symbol}', '${safe}')"
                                 class="w-full p-1.5 text-sm rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
                         </div>
                     </div>
