@@ -991,7 +991,7 @@ class QueuedCloseStrategyEngine:
             side = d.get("trigger_side", "0")
             parts.append(f"trigger_side={side}"
                          + (" (lower)" if side == "1"
-                            else " (upper)" if side == "0" else " (none)"))
+                            else " (upper)" if side == "2" else " (none)"))
         if phase in ("DONE", "ABORT"):
             # ms since the trigger, straight off the EA's own clock.
             t_trig = int(d.get("t_trigger_us") or 0)

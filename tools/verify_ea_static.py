@@ -78,6 +78,11 @@ def main():
     raw = SRC.read_text(encoding="utf-8")
     src = strip_comments(raw)
 
+    capacity = re.search(r"#define\s+ARM_SLOTS\s+(\d+)", raw)
+    check("arm capacity supports up to 1000 final positions",
+          capacity is not None and int(capacity.group(1)) >= 2000,
+          "ARM_SLOTS must be at least 2000")
+
     print(f"\n[1] Balance ({SRC.name})")
     check("braces balanced", src.count("{") == src.count("}"),
           f"{{={src.count('{')} }}={src.count('}')}")

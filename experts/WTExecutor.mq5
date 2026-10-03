@@ -23,7 +23,7 @@ input bool TestUnfillableWinner = false; // TEST ONLY: winner never completes
 #define PFX_TMP  "wt_arm.tmp"
 
 #define MAX_ARM_MACHINES 4
-#define ARM_SLOTS 256          // max orders per ladder; beyond this ARMLIMIT is rejected
+#define ARM_SLOTS 4096         // total tracked lines per arm (supports up to 2000 final positions)
 
 // arm machine states
 #define ARM_IDLE       0
