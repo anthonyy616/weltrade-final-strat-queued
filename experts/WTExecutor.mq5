@@ -1,4 +1,4 @@
-#property version "1.50"
+#property version "1.60"
 #property description "Command-driven async order executor (queued-close bot)"
 
 input int InpPollMs      = 5;     // how often to look for a command file
@@ -13,7 +13,7 @@ input bool TestUnfillableWinner = false; // TEST ONLY: winner never completes
 #define CMD_FILE "wt_cmd.txt"
 #define RES_FILE "wt_res.txt"
 #define RES_TMP  "wt_res.tmp"
-#define WT_EA_VERSION "1.5"
+#define WT_EA_VERSION "1.6"
 #define LOG_FILE  "wt_ea.log"
 
 // Per-symbol phase files. The name carries the command id so a stale file from
@@ -44,6 +44,7 @@ input bool TestUnfillableWinner = false; // TEST ONLY: winner never completes
 
 // how long an abort sweep may keep the machine busy before it force-releases it
 #define ARM_SWEEP_GRACE_MS 5000
+#define ARM_CANCEL_MAX_MS 10000
 
 // --- File logger (phase A): every Log() call also lands in <common>\Files\wt_ea.log ---
 void Log(string msg)
@@ -54,6 +55,17 @@ void Log(string msg)
    FileSeek(h, 0, SEEK_END);
    FileWriteString(h, TimeToString(TimeLocal(), TIME_DATE|TIME_SECONDS) + " " + msg + "\r\n");
    FileClose(h);
+}
+
+void MarkArmRequestAccepted(int mi, ulong request_id)
+{
+   for(int s = 0; s < ARM_SLOTS; s++)
+   {
+      if(!arm_req_used[s][mi] || arm_req_id[s][mi] != request_id) continue;
+      arm_req_done[s][mi] = true;
+      arm_req_success[s][mi] = true;
+      return;
+   }
 }
 
 bool   busy = false;
@@ -582,6 +594,11 @@ void StartCancel(int mi)
    arm_state[mi] = ARM_CANCELLING;
    // Test hook: widen the race window between trigger and losing-ladder remove.
    arm_cancel_go_at[mi] = GetTickCount64() + (ulong)(TestCancelDelayMs > 0 ? TestCancelDelayMs : 0);
+   int opposite = CountOppositePendings(mi);
+   int cancel_window = arm_cancel_ms[mi];
+   int scaled_window = cancel_window + opposite * 100;
+   if(scaled_window > ARM_CANCEL_MAX_MS) scaled_window = ARM_CANCEL_MAX_MS;
+   arm_cancel_deadline[mi] = GetTickCount64() + (ulong)scaled_window;
    // Catch anything that filled between the trigger event and this handler.
    ScanRecentDeals(mi);
    Log("[LIMIT] cancelling id=" + arm_cmdid[mi] + " symbol=" + arm_symbol[mi]
@@ -678,7 +695,15 @@ void SendCancelRemoves(int mi)
          // request without a tracking slot cannot decrement rem_pending and
          // must not wedge the machine until CANCEL_FAIL.
          if(ArmTrack(mi, rs.request_id, LANE_REM, -1, tkt) >= 0)
-            arm_rem_pending[mi]++;
+         {
+            // PLACED is already an accepted asynchronous remove.  The live
+            // order list, not a later request callback, decides when the
+            // losing ladder is actually gone.
+            if(rs.retcode == TRADE_RETCODE_PLACED)
+               MarkArmRequestAccepted(mi, rs.request_id);
+            else
+               arm_rem_pending[mi]++;
+         }
          else
             Log("[LIMIT] cancel request untracked id=" + arm_cmdid[mi]
                 + " ticket=" + IntegerToString((long)tkt)
@@ -1119,7 +1144,7 @@ void ServiceArmMachines()
          }
 
          if(arm_cancel_deadline[i] > 0 && now >= arm_cancel_deadline[i]
-            && arm_rem_pending[i] > 0)
+            && opposite_remaining > 0)
          {
             AbortMachine(i, "CANCEL_FAIL");
             continue;

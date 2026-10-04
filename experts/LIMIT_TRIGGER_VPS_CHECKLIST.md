@@ -12,7 +12,7 @@ That proves the code says what it should; this checklist proves the broker agree
 
 1. Demo account. Algo Trading on (green toolbar button, plus Tools > Options >
    Expert Advisors > Allow algorithmic trading).
-2. EA compiled and attached. The server log must print `EA ready v1.5`. If it
+2. EA compiled and attached. The server log must print `EA ready v1.6`. If it
    prints a different version, stop: burst will work but limit trigger will
    refuse, by design.
 3. One symbol enabled. Small counts (2 and 2) and the smallest lot. Do not use a
