@@ -71,9 +71,10 @@ input[type=number] {
     font-size: 16px !important;
   }
 
-  /* Comfortable touch targets for buttons and checkbox/radio labels */
+  /* Keep controls easy to tap without adding space above ordinary fields. */
   button,
-  label {
+  label:has(input[type="checkbox"]),
+  label:has(input[type="radio"]) {
     min-height: 44px;
   }
 
@@ -83,9 +84,15 @@ input[type=number] {
     min-height: 0;
   }
 
-  label:has(input[type="checkbox"]),
-  label:has(input[type="radio"]) {
-    min-height: 44px;
+  /* Field labels sit directly above their associated control on mobile. */
+  label.block:not(:has(input[type="checkbox"])):not(:has(input[type="radio"])) {
+    min-height: 0;
+    line-height: 1.2;
+    margin-bottom: 2px;
+  }
+
+  #asset-settings-container .grid {
+    row-gap: 0.5rem;
   }
 
   /* Modals: keep them short and let inner lists scroll on small screens */
