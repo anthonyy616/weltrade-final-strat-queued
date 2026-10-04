@@ -1,4 +1,4 @@
-#property version "1.40"
+#property version "1.50"
 #property description "Command-driven async order executor (queued-close bot)"
 
 input int InpPollMs      = 5;     // how often to look for a command file
@@ -13,7 +13,7 @@ input bool TestUnfillableWinner = false; // TEST ONLY: winner never completes
 #define CMD_FILE "wt_cmd.txt"
 #define RES_FILE "wt_res.txt"
 #define RES_TMP  "wt_res.tmp"
-#define WT_EA_VERSION "1.4"
+#define WT_EA_VERSION "1.5"
 #define LOG_FILE  "wt_ea.log"
 
 // Per-symbol phase files. The name carries the command id so a stale file from
@@ -598,6 +598,15 @@ int LaneOfOpposite(int lane)
    if(lane == LANE_PB) return LANE_PS;
    if(lane == LANE_PS) return LANE_PB;
    return LANE_NONE;
+}
+
+bool ArmRequestSucceeded(int lane, uint retcode)
+{
+   // Remove requests are asynchronous: some brokers report the accepted
+   // cancellation as PLACED (10008) rather than DONE (10009).  PLACED is a
+   // successful submission and must release the cancellation wait counter.
+   return retcode == TRADE_RETCODE_DONE
+          || (lane == LANE_REM && retcode == TRADE_RETCODE_PLACED);
 }
 
 int CountOppositePendings(int mi)
@@ -1385,17 +1394,17 @@ void OnTradeTransaction(const MqlTradeTransaction &t,
             if(!arm_req_used[s][mi] || arm_req_id[s][mi] != rs.request_id) continue;
             if(arm_req_done[s][mi]) break;
             arm_req_done[s][mi] = true;
-            arm_req_success[s][mi] = (rs.retcode == TRADE_RETCODE_DONE);
             arm_req_ticket[s][mi] = rs.order;
             int lane = arm_req_lane[s][mi];
             int burst_index = arm_req_burst_index[s][mi];
+            arm_req_success[s][mi] = ArmRequestSucceeded(lane, rs.retcode);
             Log("[LIMIT] request resolved id=" + arm_cmdid[mi]
                 + " request=" + IntegerToString((long)rs.request_id)
                 + " order=" + IntegerToString((long)rs.order)
                 + " lane=" + IntegerToString(lane)
                 + " retcode=" + IntegerToString((int)rs.retcode)
                 + " state=" + IntegerToString(arm_state[mi]));
-            if(rs.retcode == TRADE_RETCODE_DONE)
+            if(arm_req_success[s][mi])
             {
                if(lane == LANE_REM)
                {
