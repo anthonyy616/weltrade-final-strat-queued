@@ -1,4 +1,4 @@
-#property version "1.30"
+#property version "1.40"
 #property description "Command-driven async order executor (queued-close bot)"
 
 input int InpPollMs      = 5;     // how often to look for a command file
@@ -13,7 +13,7 @@ input bool TestUnfillableWinner = false; // TEST ONLY: winner never completes
 #define CMD_FILE "wt_cmd.txt"
 #define RES_FILE "wt_res.txt"
 #define RES_TMP  "wt_res.tmp"
-#define WT_EA_VERSION "1.3"
+#define WT_EA_VERSION "1.4"
 #define LOG_FILE  "wt_ea.log"
 
 // Per-symbol phase files. The name carries the command id so a stale file from
@@ -129,12 +129,17 @@ double arm_bl_lot[ARM_SLOTS][MAX_ARM_MACHINES];
 double arm_bl_tp[ARM_SLOTS][MAX_ARM_MACHINES];
 double arm_bl_sl[ARM_SLOTS][MAX_ARM_MACHINES];
 string arm_bl_tag[ARM_SLOTS][MAX_ARM_MACHINES];
+bool   arm_bl_sent[ARM_SLOTS][MAX_ARM_MACHINES];
+bool   arm_bl_done[ARM_SLOTS][MAX_ARM_MACHINES];
 
 int    arm_req_used[ARM_SLOTS][MAX_ARM_MACHINES];
 ulong  arm_req_id[ARM_SLOTS][MAX_ARM_MACHINES];
 int    arm_req_lane[ARM_SLOTS][MAX_ARM_MACHINES];
 bool   arm_req_done[ARM_SLOTS][MAX_ARM_MACHINES];
+bool   arm_req_success[ARM_SLOTS][MAX_ARM_MACHINES];
 ulong  arm_req_ticket[ARM_SLOTS][MAX_ARM_MACHINES];
+int    arm_req_burst_index[ARM_SLOTS][MAX_ARM_MACHINES];
+ulong  arm_req_target[ARM_SLOTS][MAX_ARM_MACHINES];
 
 string ArmStateName(int s)
 {
@@ -197,7 +202,12 @@ void ResetArmMachine(int mi)
    arm_t_cancel[mi]      = 0;
    arm_t_burst[mi]       = 0;
    for(int l = 0; l < 4; l++) { arm_exp[mi][l] = 0; arm_ok[mi][l] = 0; }
-   for(int s = 0; s < ARM_SLOTS; s++) arm_req_used[s][mi] = false;
+   for(int s = 0; s < ARM_SLOTS; s++)
+   {
+      arm_req_used[s][mi] = false;
+      arm_bl_sent[s][mi] = false;
+      arm_bl_done[s][mi] = false;
+   }
 }
 
 int FindMachineBySymbol(const string sym)
@@ -215,13 +225,15 @@ int FindMachineByRequest(const ulong req)
    {
       if(arm_state[i] == ARM_IDLE) continue;
       for(int s = 0; s < ARM_SLOTS; s++)
-         if(arm_req_used[s][i] && arm_req_id[s][i] == req && !arm_req_done[s][i])
+         if(arm_req_used[s][i] && arm_req_id[s][i] == req
+            && !arm_req_done[s][i])
             return i;
    }
    return -1;
 }
 
-int ArmTrack(int mi, ulong id, int lane)
+int ArmTrack(int mi, ulong id, int lane, int burst_index = -1,
+             ulong target_ticket = 0)
 {
    for(int s = 0; s < ARM_SLOTS; s++)
    {
@@ -230,7 +242,10 @@ int ArmTrack(int mi, ulong id, int lane)
       arm_req_id[s][mi]    = id;
       arm_req_lane[s][mi]  = lane;
       arm_req_done[s][mi]  = false;
+      arm_req_success[s][mi] = false;
       arm_req_ticket[s][mi]= 0;
+      arm_req_burst_index[s][mi] = burst_index;
+      arm_req_target[s][mi] = target_ticket;
       return s;
    }
    return -1;
@@ -264,7 +279,7 @@ void WriteAck(bool accepted, const string reason)
 void WritePhase(int mi, const string phase, const string reason)
 {
    ulong now = GetMicrosecondCount();
-   ulong t0 = arm_t_arm[mi];
+   ulong phase_start_us = arm_t_arm[mi];
    string s = "id=" + arm_cmdid[mi] + "\n";
    s += "symbol=" + arm_symbol[mi] + "\n";
    s += "magic=" + IntegerToString(arm_magic[mi]) + "\n";
@@ -283,11 +298,11 @@ void WritePhase(int mi, const string phase, const string reason)
    s += "burst_expected=" + IntegerToString(arm_burst_exp[mi]) + "\n";
    s += "dealscan_fallbacks=" + IntegerToString(arm_dealscan_fail[mi]) + "\n";
    s += "trigger_side=" + IntegerToString(arm_trigger_side[mi]) + "\n";
-   s += "t_arm_us=" + IntegerToString(t0 > 0 ? (ulong)t0 : 0) + "\n";
+   s += "t_arm_us=" + IntegerToString(phase_start_us > 0 ? (ulong)phase_start_us : 0) + "\n";
    s += "t_trigger_us=" + IntegerToString(arm_t_trigger[mi]) + "\n";
    s += "t_cancel_us=" + IntegerToString(arm_t_cancel[mi]) + "\n";
    s += "t_burst_us=" + IntegerToString(arm_t_burst[mi]) + "\n";
-   s += "elapsed_ms=" + DoubleToString(t0 > 0 ? (double)(now - t0) / 1000.0 : 0.0, 2) + "\n";
+   s += "elapsed_ms=" + DoubleToString(phase_start_us > 0 ? (double)(now - phase_start_us) / 1000.0 : 0.0, 2) + "\n";
    s += "version=" + WT_EA_VERSION + "\n";
    WriteAtomic(arm_pfile[mi], PFX_TMP, s);
    Log("[LIMIT] phase id=" + arm_cmdid[mi] + " symbol=" + arm_symbol[mi]
@@ -424,7 +439,7 @@ int RemovePendings(const string sym, const long mg, int mi)
          continue;
       }
       submitted++;
-      if(mi >= 0 && ArmTrack(mi, rs.request_id, LANE_REM) >= 0)
+      if(mi >= 0 && ArmTrack(mi, rs.request_id, LANE_REM, -1, tkt) >= 0)
          arm_rem_pending[mi]++;
    }
    return submitted;
@@ -538,6 +553,8 @@ void ScanRecentDeals(int mi)
       if(dt == 0) continue;
       if(HistoryDealGetInteger(dt, DEAL_MAGIC) != arm_magic[mi]) continue;
       if(HistoryDealGetString(dt, DEAL_SYMBOL) != arm_symbol[mi]) continue;
+      if((datetime)HistoryDealGetInteger(dt, DEAL_TIME) < arm_start_sec[mi])
+         continue;
       if(HistoryDealGetInteger(dt, DEAL_ENTRY) != DEAL_ENTRY_IN) continue;
       ulong ot = (ulong)HistoryDealGetInteger(dt, DEAL_ORDER);
       // Account/balance transactions and some broker-generated history rows
@@ -625,6 +642,20 @@ void SendCancelRemoves(int mi)
       if(OrderGetInteger(ORDER_MAGIC) != arm_magic[mi]) continue;
       if((ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE) != losing_type) continue;
       remaining++;
+      bool already_pending = false;
+      for(int s = 0; s < ARM_SLOTS; s++)
+      {
+         if(!arm_req_used[s][mi]) continue;
+         if(arm_req_lane[s][mi] == LANE_REM
+            && arm_req_target[s][mi] == tkt
+            && (!arm_req_done[s][mi] || arm_req_success[s][mi]))
+         {
+            already_pending = true;
+            break;
+         }
+      }
+      if(already_pending) continue;
+
       MqlTradeRequest rq; MqlTradeResult rs;
       ZeroMemory(rq); ZeroMemory(rs);
       rq.action   = TRADE_ACTION_REMOVE;
@@ -637,7 +668,7 @@ void SendCancelRemoves(int mi)
          // Count only requests that are actually tracked.  A submitted
          // request without a tracking slot cannot decrement rem_pending and
          // must not wedge the machine until CANCEL_FAIL.
-         if(ArmTrack(mi, rs.request_id, LANE_REM) >= 0)
+         if(ArmTrack(mi, rs.request_id, LANE_REM, -1, tkt) >= 0)
             arm_rem_pending[mi]++;
          else
             Log("[LIMIT] cancel request untracked id=" + arm_cmdid[mi]
@@ -700,6 +731,7 @@ void SendBurstPass(int mi)
       bool want = (arm_trigger_side[mi] == LANE_PB) ? (lane == LANE_CS)
                                                     : (lane == LANE_CB);
       if(!want) continue;
+      if(arm_bl_done[s][mi] || arm_bl_sent[s][mi]) continue;
 
       bool is_buy = (lane == LANE_CB);
       MqlTradeRequest rq; MqlTradeResult rs;
@@ -721,8 +753,16 @@ void SendBurstPass(int mi)
 
       if(OrderSendAsync(rq, rs))
       {
-         ArmTrack(mi, rs.request_id, is_buy ? LANE_CB : LANE_CS);
-         arm_burst_sent[mi]++;
+         arm_bl_sent[s][mi] = true;
+         if(ArmTrack(mi, rs.request_id, is_buy ? LANE_CB : LANE_CS, s) < 0)
+         {
+            arm_bl_sent[s][mi] = false;
+            Log("[LIMIT] burst request untracked id=" + arm_cmdid[mi]
+                + " tag=" + arm_bl_tag[s][mi]
+                + " request=" + IntegerToString((long)rs.request_id));
+         }
+         else
+            arm_burst_sent[mi]++;
       }
       else
       {
@@ -1345,8 +1385,10 @@ void OnTradeTransaction(const MqlTradeTransaction &t,
             if(!arm_req_used[s][mi] || arm_req_id[s][mi] != rs.request_id) continue;
             if(arm_req_done[s][mi]) break;
             arm_req_done[s][mi] = true;
+            arm_req_success[s][mi] = (rs.retcode == TRADE_RETCODE_DONE);
             arm_req_ticket[s][mi] = rs.order;
             int lane = arm_req_lane[s][mi];
+            int burst_index = arm_req_burst_index[s][mi];
             Log("[LIMIT] request resolved id=" + arm_cmdid[mi]
                 + " request=" + IntegerToString((long)rs.request_id)
                 + " order=" + IntegerToString((long)rs.order)
@@ -1362,6 +1404,11 @@ void OnTradeTransaction(const MqlTradeTransaction &t,
                else if(lane == LANE_CS || lane == LANE_CB)
                {
                   arm_burst_ok[mi]++;   // contingent market burst resolved
+                  if(burst_index >= 0 && burst_index < ARM_SLOTS)
+                  {
+                     arm_bl_sent[burst_index][mi] = false;
+                     arm_bl_done[burst_index][mi] = true;
+                  }
                }
                else
                {
@@ -1374,6 +1421,9 @@ void OnTradeTransaction(const MqlTradeTransaction &t,
                Log("[LIMIT] request failed id=" + arm_cmdid[mi] + " lane="
                    + IntegerToString(lane) + " retcode=" + IntegerToString((int)rs.retcode));
                if(lane == LANE_REM && arm_rem_pending[mi] > 0) arm_rem_pending[mi]--;
+               if((lane == LANE_CS || lane == LANE_CB)
+                  && burst_index >= 0 && burst_index < ARM_SLOTS)
+                  arm_bl_sent[burst_index][mi] = false;
             }
             if(arm_sent[mi] > 0) arm_sent[mi]--;
             if(arm_burst_sent[mi] > 0 && (lane == LANE_CS || lane == LANE_CB))

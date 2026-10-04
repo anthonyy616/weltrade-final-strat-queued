@@ -82,8 +82,8 @@ async def startup_event():
             print(f"[SERVER] EA ready v{status.version}")
             if status.stale:
                 print(f"[SERVER] WARNING: attached EA v{status.version} is older "
-                      f"than the repo source — recompile and reattach WTExecutor "
-                      f"before starting a strategy")
+                      f"than the repo source — automatic reload was not completed; "
+                      f"resolve the stale EA before starting a strategy")
         else:
             print(f"[SERVER] EA unavailable: {status.reason} (sequential fallback active)")
     except Exception as e:

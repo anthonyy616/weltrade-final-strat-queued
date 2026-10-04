@@ -22,7 +22,7 @@ logger = logging.getLogger("ea")
 # Repo source of truth for the EA (plan section 2: experts/WTExecutor.mq5)
 EA_SOURCE = Path(__file__).resolve().parent.parent / "experts" / "WTExecutor.mq5"
 # Must match #define WT_EA_VERSION in the .mq5 source (plan C.4)
-WT_EA_VERSION = "1.3"
+WT_EA_VERSION = "1.4"
 
 COMPILE_TIMEOUT = float(os.getenv("EA_COMPILE_TIMEOUT", "60"))
 RELAUNCH_WAIT_S = 90.0
@@ -341,6 +341,7 @@ async def _ensure(bridge, allow_restart: bool) -> EAStatus:
     ex5 = dest.with_suffix(".ex5")
     needs_compile = (copied or not ex5.exists()
                      or ex5.stat().st_mtime < dest.stat().st_mtime)
+    source_changed = needs_compile
     if needs_compile:
         metaeditor = _find_metaeditor(ti)
         if metaeditor is None:
@@ -363,13 +364,24 @@ async def _ensure(bridge, allow_restart: bool) -> EAStatus:
 
     # 4. Ping
     ver = await asyncio.to_thread(_sync_ping, bridge)
-    if ver:
-        if ver != WT_EA_VERSION:
-            logger.warning(
-                f"EA attached reports v{ver} but repo source is v{WT_EA_VERSION} "
-                "(stale compiled EA attached)")
+    if ver == WT_EA_VERSION:
         logger.info(f"EA ready v{ver}")
-        return EAStatus(available=True, version=ver, stale=(ver != WT_EA_VERSION))
+        return EAStatus(available=True, version=ver)
+
+    # A source update can compile successfully while the terminal continues
+    # running the previous EA instance.  If it is safe to restart, do that
+    # automatically so a changed executor is never silently rejected and the
+    # operator does not have to detach/reattach the chart by hand.
+    if ver and source_changed:
+        logger.warning(
+            f"EA attached reports v{ver} after source update; "
+            f"expected v{WT_EA_VERSION} — restarting terminal to load it")
+    elif ver:
+        logger.warning(
+            f"EA attached reports v{ver} but repo source is v{WT_EA_VERSION} "
+            "(stale compiled EA attached)")
+        return EAStatus(available=True, version=ver,
+                        stale=(ver != WT_EA_VERSION))
 
     # 5. Ping failed — restart only when the account has zero open positions
     # (plan decision in section 1) and only when allowed
