@@ -1296,7 +1296,6 @@ void OnTradeTransaction(const MqlTradeTransaction &t,
       {
          if(arm_state[mi] == ARM_IDLE) continue;
          if(t.symbol != arm_symbol[mi]) continue;
-         if(t.magic != arm_magic[mi]) continue;
          // The deal must be an ENTRY. HistoryDealSelect inside the transaction
          // handler is unverified on this broker, so fall back to counting it
          // when the lookup fails (a DEAL_ADD for a tracked pending ladder order
