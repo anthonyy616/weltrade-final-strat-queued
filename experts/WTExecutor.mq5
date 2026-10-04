@@ -1,4 +1,4 @@
-#property version "1.60"
+#property version "1.70"
 #property description "Command-driven async order executor (queued-close bot)"
 
 input int InpPollMs      = 5;     // how often to look for a command file
@@ -13,7 +13,7 @@ input bool TestUnfillableWinner = false; // TEST ONLY: winner never completes
 #define CMD_FILE "wt_cmd.txt"
 #define RES_FILE "wt_res.txt"
 #define RES_TMP  "wt_res.tmp"
-#define WT_EA_VERSION "1.6"
+#define WT_EA_VERSION "1.7"
 #define LOG_FILE  "wt_ea.log"
 
 // Per-symbol phase files. The name carries the command id so a stale file from
@@ -535,16 +535,16 @@ int CountEntryDeal(int mi, const ulong deal, const ulong order)
    }
    if(DealSeen(mi, deal))
    {
-      Log("[LIMIT] deal duplicate ignored: deal=" +
-         IntegerToString((long)deal) +
-         " order=" + IntegerToString((long)order) +
-         " lane=" + IntegerToString(lane) +
-         " cmd=" + arm_cmdid[mi]);
+      // Log("[LIMIT] deal duplicate ignored: deal=" +
+      //    IntegerToString((long)deal) +
+      //    " order=" + IntegerToString((long)order) +
+      //    " lane=" + IntegerToString(lane) +
+      //    " cmd=" + arm_cmdid[mi]);
       return lane;
    }
    MarkDeal(mi, deal, lane);
-   Log("[LIMIT] fill id=" + arm_cmdid[mi] + " symbol=" + arm_symbol[mi]
-       + " lane=" + IntegerToString(lane) + " order=" + IntegerToString((long)order));
+   // Log("[LIMIT] fill id=" + arm_cmdid[mi] + " symbol=" + arm_symbol[mi]
+   //    + " lane=" + IntegerToString(lane) + " order=" + IntegerToString((long)order));
    return lane;
 }
 
@@ -642,9 +642,9 @@ int CountOppositePendings(int mi)
       if((ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE) == losing_type)
       {
          remaining++;
-         Log("[LIMIT] opposite-side pending remains id=" + arm_cmdid[mi]
-             + " ticket=" + IntegerToString((long)ticket)
-             + " lane=" + IntegerToString(losing));
+         // Log("[LIMIT] opposite-side pending remains id=" + arm_cmdid[mi]
+         //     + " ticket=" + IntegerToString((long)ticket)
+         //     + " lane=" + IntegerToString(losing));
       }
    }
    return remaining;
@@ -709,10 +709,10 @@ void SendCancelRemoves(int mi)
                 + " ticket=" + IntegerToString((long)tkt)
                 + " request=" + IntegerToString((long)rs.request_id));
          sent++;
-         Log("[LIMIT] cancel attempt id=" + arm_cmdid[mi]
-             + " ticket=" + IntegerToString((long)tkt)
-             + " lane=" + IntegerToString(losing)
-             + " retcode=" + IntegerToString((int)rs.retcode));
+         // Log("[LIMIT] cancel attempt id=" + arm_cmdid[mi]
+         //     + " ticket=" + IntegerToString((long)tkt)
+         //     + " lane=" + IntegerToString(losing)
+         //     + " retcode=" + IntegerToString((int)rs.retcode));
       }
       else
       {
@@ -1423,12 +1423,12 @@ void OnTradeTransaction(const MqlTradeTransaction &t,
             int lane = arm_req_lane[s][mi];
             int burst_index = arm_req_burst_index[s][mi];
             arm_req_success[s][mi] = ArmRequestSucceeded(lane, rs.retcode);
-            Log("[LIMIT] request resolved id=" + arm_cmdid[mi]
-                + " request=" + IntegerToString((long)rs.request_id)
-                + " order=" + IntegerToString((long)rs.order)
-                + " lane=" + IntegerToString(lane)
-                + " retcode=" + IntegerToString((int)rs.retcode)
-                + " state=" + IntegerToString(arm_state[mi]));
+            // Log("[LIMIT] request resolved id=" + arm_cmdid[mi]
+            //     + " request=" + IntegerToString((long)rs.request_id)
+            //     + " order=" + IntegerToString((long)rs.order)
+            //     + " lane=" + IntegerToString(lane)
+            //     + " retcode=" + IntegerToString((int)rs.retcode)
+            //     + " state=" + IntegerToString(arm_state[mi]));
             if(arm_req_success[s][mi])
             {
                if(lane == LANE_REM)
@@ -1523,11 +1523,11 @@ void OnTradeTransaction(const MqlTradeTransaction &t,
          }
          if(is_entry)
          {
-            Log("[LIMIT] deal classified as entry: deal="
-                + IntegerToString((long)t.deal)
-                + " order=" + IntegerToString((long)t.order)
-                + " cmd=" + arm_cmdid[mi]
-                + " state=" + IntegerToString(arm_state[mi]));
+            // Log("[LIMIT] deal classified as entry: deal="
+            //     + IntegerToString((long)t.deal)
+            //     + " order=" + IntegerToString((long)t.order)
+            //     + " cmd=" + arm_cmdid[mi]
+            //     + " state=" + IntegerToString(arm_state[mi]));
             ArmOnEntryDeal(mi, t.deal, t.order);
          }
          break;

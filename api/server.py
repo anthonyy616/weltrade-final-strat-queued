@@ -11,6 +11,7 @@ import asyncio
 import os
 import signal
 import sys
+import shutil
 from dotenv import load_dotenv
 from cachetools import TTLCache 
 import gc
@@ -237,8 +238,9 @@ async def _prepare_fresh_session(bot):
         gc.collect()
 
 
-async def _delete_db_file() -> bool:
-    if not os.path.exists(DB_PATH):
+async def _delete_db_directory() -> bool:
+    db_dir = os.path.dirname(DB_PATH) or "db"
+    if not os.path.exists(db_dir):
         return True
 
     retry_count = 0
@@ -246,17 +248,17 @@ async def _delete_db_file() -> bool:
 
     while retry_count < max_retries:
         try:
-            os.remove(DB_PATH)
-            print(f"[START] Cleaned DB for fresh session: {DB_PATH}")
+            shutil.rmtree(db_dir)
+            print(f"[START] Cleaned DB directory for fresh session: {db_dir}")
             return True
         except PermissionError as e:
             retry_count += 1
-            print(f"[START] DB delete attempt {retry_count} failed: {e}")
+            print(f"[START] DB directory delete attempt {retry_count} failed: {e}")
             if retry_count < max_retries:
                 await asyncio.sleep(0.5)
         except Exception as e:
             retry_count += 1
-            print(f"[START] DB delete attempt {retry_count} failed: {e}")
+            print(f"[START] DB directory delete attempt {retry_count} failed: {e}")
             if retry_count < max_retries:
                 await asyncio.sleep(0.5)
 
@@ -264,13 +266,13 @@ async def _delete_db_file() -> bool:
     await asyncio.sleep(0.5)
 
     try:
-        os.remove(DB_PATH)
-        print(f"[START] Cleaned DB after releasing locks: {DB_PATH}")
+        shutil.rmtree(db_dir)
+        print(f"[START] Cleaned DB directory after releasing locks: {db_dir}")
         return True
     except Exception as e:
-        print(f"[START] Final DB delete failed: {e}")
+        print(f"[START] Final DB directory delete failed: {e}")
 
-    return not os.path.exists(DB_PATH)
+    return not os.path.exists(db_dir)
 
 
 async def _release_db_locks(db_path: str) -> None:
@@ -324,13 +326,14 @@ async def _release_db_locks(db_path: str) -> None:
 async def start_all(bot = Depends(get_current_bot)):
     """Start all enabled symbols - always starts with fresh DB"""
     await _prepare_fresh_session(bot)
-    deleted = await _delete_db_file()
+    deleted = await _delete_db_directory()
 
-    if not deleted and os.path.exists(DB_PATH):
+    if not deleted and os.path.exists(os.path.dirname(DB_PATH) or "db"):
         raise HTTPException(
             status_code=409,
-            detail="DB file is still locked after closing the bot session. Stop the process holding the file and try again."
+            detail="DB directory is still locked after closing the bot session. Stop the process holding it and try again."
         )
+    os.makedirs(os.path.dirname(DB_PATH) or "db", exist_ok=True)
     
     # [FIX] Auto-Restart Trading Engine if stopped
     if not trading_engine.running:
@@ -396,19 +399,16 @@ async def terminate_symbol(symbol: str, bot = Depends(get_current_bot)):
 async def terminate_all(bot = Depends(get_current_bot)):
     """Nuclear reset - sweep all bot-owned terminal state and clean DB."""
     summary = await bot.terminate_all()
+    close_fn = getattr(bot, "close", None)
+    if close_fn is not None:
+        await close_fn()
     
-    # Clean DB after termination for complete reset
+    # Remove the complete persistence directory after termination.
     db_cleaned = True
     db_warning = None
-    
-    if os.path.exists(DB_PATH):
-        try:
-            os.remove(DB_PATH)
-            print(f"[TERMINATE] Cleaned DB after nuclear reset: {DB_PATH}")
-        except Exception as e:
-            print(f"[TERMINATE] Could not clean DB: {e}")
-            db_cleaned = False
-            db_warning = f"Could not delete DB file ({e}). Please retry or restart."
+    db_cleaned = await _delete_db_directory()
+    if not db_cleaned:
+        db_warning = "Could not delete DB directory. Please retry or restart."
     
     return {
         "status": "terminated_all",
