@@ -526,6 +526,8 @@ int CountEntryDeal(int mi, const ulong deal, const ulong order)
 // before the machine was watching is still caught (doc 08 section 7/9).
 void ScanRecentDeals(int mi)
 {
+   if(mi < 0 || mi >= MAX_ARM_MACHINES || arm_state[mi] == ARM_IDLE)
+      return;
    datetime from = arm_start_sec[mi] - 60;
    if(from <= 0) from = 0;
    if(!HistorySelect(from, TimeCurrent() + 5)) return;
@@ -538,6 +540,9 @@ void ScanRecentDeals(int mi)
       if(HistoryDealGetString(dt, DEAL_SYMBOL) != arm_symbol[mi]) continue;
       if(HistoryDealGetInteger(dt, DEAL_ENTRY) != DEAL_ENTRY_IN) continue;
       ulong ot = (ulong)HistoryDealGetInteger(dt, DEAL_ORDER);
+      // Account/balance transactions and some broker-generated history rows
+      // have no originating order. They can never belong to an armed ladder.
+      if(ot == 0) continue;
       CountEntryDeal(mi, dt, ot);
    }
 }
@@ -980,7 +985,7 @@ void ServiceArmMachines()
       // Safety net for a missed or mis-classified DEAL_ADD: re-read deal
       // history periodically once the machine is live. Rate-limited because
       // the poll runs every few milliseconds.
-      if(now >= arm_next_scan[i])
+      if(arm_state[i] != ARM_IDLE && now >= arm_next_scan[i])
       {
          ScanRecentDeals(i);
          arm_next_scan[i] = now + 250;
