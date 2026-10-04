@@ -241,7 +241,7 @@ def _relaunch(exe: Path, ini_path: Path) -> bool:
         return False
 
 
-def _wait_terminal_and_ea(bridge, symbol: str, period: str) -> Optional[str]:
+async def _wait_terminal_and_ea(bridge, symbol: str, period: str) -> Optional[str]:
     """Wait for the terminal to come up, log in via the shared init path, then
     ping the EA. Returns the EA version, or None."""
     # Wait for terminal (slow machines: plan allows 90 s)
@@ -255,7 +255,7 @@ def _wait_terminal_and_ea(bridge, symbol: str, period: str) -> Optional[str]:
         time_left = deadline - asyncio.get_event_loop().time()
         if time_left <= 0:
             return None
-        asyncio.sleep(2.0)
+        await asyncio.sleep(2.0)
 
     from core.trading_engine import init_mt5_connection
     if not init_mt5_connection():
@@ -281,7 +281,7 @@ def _wait_terminal_and_ea(bridge, symbol: str, period: str) -> Optional[str]:
         time_left = ea_deadline - asyncio.get_event_loop().time()
         if time_left <= 0:
             return None
-        asyncio.sleep(0.5)
+        await asyncio.sleep(0.5)
     return None
 
 
