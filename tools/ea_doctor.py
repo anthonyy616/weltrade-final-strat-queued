@@ -13,6 +13,7 @@ import os
 import sys
 from pathlib import Path
 
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import MetaTrader5 as mt5   # noqa: E402
@@ -20,6 +21,9 @@ import MetaTrader5 as mt5   # noqa: E402
 from core.ea_bridge import EABridge   # noqa: E402
 from core import ea_provisioner as prov   # noqa: E402
 from core import bulk_orders as bo   # noqa: E402
+
+from dotenv import load_dotenv
+load_dotenv()
 
 SYMBOL = os.getenv("EA_CHART_SYMBOL", "FX Vol 20")
 MAGIC = 999004   # test magic, NOT the strategy's
