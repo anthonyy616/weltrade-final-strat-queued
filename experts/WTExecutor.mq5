@@ -95,7 +95,7 @@ int    arm_burst_exp[MAX_ARM_MACHINES];
 int    arm_burst_ok[MAX_ARM_MACHINES];
 int    arm_burst_sent[MAX_ARM_MACHINES];
 int    arm_burst_pass[MAX_ARM_MACHINES]; // retry passes (invalid-stops style)
-int    arm_cancel_go_at[MAX_ARM_MACHINES]; // TestCancelDelayMs
+ulong  arm_cancel_go_at[MAX_ARM_MACHINES]; // TestCancelDelayMs
 ulong  arm_win_deadline[MAX_ARM_MACHINES];
 ulong  arm_cancel_deadline[MAX_ARM_MACHINES];
 int    arm_win_ms[MAX_ARM_MACHINES];
@@ -511,10 +511,10 @@ void ScanRecentDeals(int mi)
    {
       ulong dt = HistoryDealGetTicket(i);
       if(dt == 0) continue;
-      if(HistoryDealGetInteger(DEAL_MAGIC) != arm_magic[mi]) continue;
-      if(HistoryDealGetString(DEAL_SYMBOL) != arm_symbol[mi]) continue;
-      if(HistoryDealGetInteger(DEAL_ENTRY) != DEAL_ENTRY_IN) continue;
-      ulong ot = (ulong)HistoryDealGetInteger(DEAL_ORDER);
+      if(HistoryDealGetInteger(dt, DEAL_MAGIC) != arm_magic[mi]) continue;
+      if(HistoryDealGetString(dt, DEAL_SYMBOL) != arm_symbol[mi]) continue;
+      if(HistoryDealGetInteger(dt, DEAL_ENTRY) != DEAL_ENTRY_IN) continue;
+      ulong ot = (ulong)HistoryDealGetInteger(dt, DEAL_ORDER);
       CountEntryDeal(mi, dt, ot);
    }
 }
@@ -536,7 +536,7 @@ void StartCancel(int mi)
    arm_cancel_started[mi] = true;
    arm_state[mi] = ARM_CANCELLING;
    // Test hook: widen the race window between trigger and losing-ladder remove.
-   arm_cancel_go_at[mi] = (int)(GetTickCount64() + (TestCancelDelayMs > 0 ? TestCancelDelayMs : 0));
+   arm_cancel_go_at[mi] = GetTickCount64() + (ulong)(TestCancelDelayMs > 0 ? TestCancelDelayMs : 0);
    // Catch anything that filled between the trigger event and this handler.
    ScanRecentDeals(mi);
    Log("[LIMIT] cancelling id=" + arm_cmdid[mi] + " symbol=" + arm_symbol[mi]
@@ -1304,7 +1304,9 @@ void OnTradeTransaction(const MqlTradeTransaction &t,
          bool is_entry = true;
          if(HistoryDealSelect(t.deal))
          {
-            if(HistoryDealGetInteger(DEAL_ENTRY) != DEAL_ENTRY_IN) is_entry = false;
+            // MqlTradeTransaction has no magic field: read it off the deal.
+            if(HistoryDealGetInteger(t.deal, DEAL_MAGIC) != arm_magic[mi]) continue;
+            if(HistoryDealGetInteger(t.deal, DEAL_ENTRY) != DEAL_ENTRY_IN) is_entry = false;
          }
          else
          {
