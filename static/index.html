@@ -384,6 +384,13 @@
                                     class="w-full p-1.5 text-sm rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
                             </div>
                             <div class="col-span-2 text-[9px] text-slate-500">Only used by symbols set to Limit Trigger open mode. Burst is unaffected.</div>
+                            <div class="col-span-2 text-[10px] leading-relaxed text-slate-500 dark:text-slate-400 border-t border-slate-700 pt-2">
+                                <strong>What these do:</strong> Max Time is the session limit in minutes (0 = no limit).
+                                Armed Timeout is how long a limit-trigger setup may wait for a fill. Win Fill and
+                                Cancel Ack are broker-response deadlines in milliseconds. Burst Timing controls whether
+                                contingent market orders wait for pending-order cancellation or run in parallel.
+                                The failure limit stops a symbol after repeated limit-trigger open failures.
+                            </div>
                         </div>
                     </div>
 
@@ -1321,6 +1328,14 @@
                             <input type="number" step="0.1" id="sym_${safe}_entry_offset" value="${cfg.entry_offset ?? 50}" min="0.1" oninput="scheduleAutoSave()" onfocus="setLastInteracted('${symbol}', '${safe}')"
                                 class="w-full p-1.5 text-sm rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
                         </div>
+                    </div>
+                    <div class="text-[10px] leading-relaxed text-slate-500 dark:text-slate-400">
+                        <strong>Per-symbol settings:</strong> Counts are the number of positions opened per side;
+                        lots are the volume of each position. Constant Side identifies the side kept as the
+                        constant leg. Grid Distance is the price spacing between cycles. Moving Freq and Constant
+                        Freq are the seconds between moving and constant opens. Burst opens immediately; Limit
+                        Trigger first places buy/sell limits and waits for price to reach one. Entry Offset is the
+                        distance of those limit prices from the current price.
                     </div>
                     <div class="flex justify-end gap-1.5">
                         <button type="button" onclick="startSymbol('${symbol}')"

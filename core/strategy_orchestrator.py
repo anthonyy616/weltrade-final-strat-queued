@@ -63,6 +63,8 @@ class StrategyOrchestrator:
                 self._attach_ea(strategy)
                 self.strategies[sym] = strategy
 
+        self.active_symbols = enabled_symbols
+
     def _attach_ea(self, strategy):
         """Give a new strategy the shared EA bridge/status (plan phase E).
         Reads the class-level BotManager handle — no import cycle."""
@@ -71,8 +73,6 @@ class StrategyOrchestrator:
         if holder is not None and holder.ea_bridge is not None:
             strategy.ea_bridge = holder.ea_bridge
             strategy.ea_status = holder.ea_status
-
-        self.active_symbols = enabled_symbols
 
     async def reconcile_strategies_on_startup(self):
         """Run a one-time startup reconciliation for every instantiated strategy."""
