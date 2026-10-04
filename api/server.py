@@ -81,11 +81,9 @@ async def startup_event():
         if status.available:
             print(f"[SERVER] EA ready v{status.version}")
             if status.stale:
-                # Burst still works on an older EA, but limit_trigger cannot:
-                # ARMLIMIT did not exist before v1.3.
                 print(f"[SERVER] WARNING: attached EA v{status.version} is older "
-                      f"than the repo source — limit_trigger will refuse to "
-                      f"arm until the EA is recompiled and reattached")
+                      f"than the repo source — recompile and reattach WTExecutor "
+                      f"before starting a strategy")
         else:
             print(f"[SERVER] EA unavailable: {status.reason} (sequential fallback active)")
     except Exception as e:
@@ -114,10 +112,6 @@ class SymbolConfig(BaseModel):
     grid_distance: Optional[float] = None
     moving_freq: Optional[float] = None
     constant_freq: Optional[float] = None
-    # Limit-trigger open mode (doc 08 §4). Declared here explicitly because
-    # Pydantic silently drops unknown keys, so a missing field here means the
-    # value never reaches ConfigManager.
-    open_mode: Optional[str] = None
     entry_offset: Optional[float] = None
 
 class GlobalConfig(BaseModel):
@@ -128,7 +122,6 @@ class GlobalConfig(BaseModel):
     armed_timeout_seconds: Optional[int] = None
     win_fill_deadline_ms: Optional[int] = None
     cancel_ack_deadline_ms: Optional[int] = None
-    burst_mode: Optional[str] = None
     max_consecutive_open_failures: Optional[int] = None
 
 class ConfigUpdate(BaseModel):
@@ -401,8 +394,8 @@ async def terminate_symbol(symbol: str, bot = Depends(get_current_bot)):
 
 @app.post("/control/terminate-all")
 async def terminate_all(bot = Depends(get_current_bot)):
-    """Nuclear reset - close all positions for all symbols and clean DB"""
-    await bot.terminate_all()
+    """Nuclear reset - sweep all bot-owned terminal state and clean DB."""
+    summary = await bot.terminate_all()
     
     # Clean DB after termination for complete reset
     db_cleaned = True
@@ -419,6 +412,7 @@ async def terminate_all(bot = Depends(get_current_bot)):
     
     return {
         "status": "terminated_all",
+        **summary,
         "db_cleaned": db_cleaned,
         "warning": db_warning
     }

@@ -197,14 +197,11 @@ class QueuedCloseState:
     moving_lot: float = 0.01
     constant_lot: float = 0.01
 
-    # Limit-trigger open mode snapshot (doc 08 section 4/8). Captured at
-    # start() with the rest of the snapshot, never read live mid-cycle.
-    open_mode: str = "burst"
+    # Parallel limit-trigger is the only opening behavior.
     entry_offset: float = 50.0
     armed_timeout_seconds: int = 120
     win_fill_deadline_ms: int = 1500
     cancel_ack_deadline_ms: int = 1500
-    burst_mode: str = "AFTER_CANCEL"
     max_consecutive_open_failures: int = 3
 
     # Set only while the limit open is in flight, so stop()/terminate() can
@@ -343,14 +340,11 @@ class QueuedCloseStrategyEngine:
         self.state.moving_lot = buy_lot if moving_side == "buy" else sell_lot
         self.state.constant_lot = buy_lot if constant_side == "buy" else sell_lot
 
-        # Limit-trigger snapshot, read here and never again for this cycle.
-        self.state.open_mode = cfg.get("open_mode", "burst")
         self.state.entry_offset = float(cfg.get("entry_offset", 50.0))
         gbl = self.config_manager.get_global_config() or {}
         self.state.armed_timeout_seconds = int(gbl.get("armed_timeout_seconds", 120))
         self.state.win_fill_deadline_ms = int(gbl.get("win_fill_deadline_ms", 1500))
         self.state.cancel_ack_deadline_ms = int(gbl.get("cancel_ack_deadline_ms", 1500))
-        self.state.burst_mode = gbl.get("burst_mode", "AFTER_CANCEL")
         self.state.max_consecutive_open_failures = int(
             gbl.get("max_consecutive_open_failures", 3))
 
@@ -426,29 +420,13 @@ class QueuedCloseStrategyEngine:
         moving_leg = "MovingBuy" if self.state.moving_side == "buy" else "MovingSell"
         constant_leg = "ConstantBuy" if self.state.moving_side == "sell" else "ConstantSell"
 
-        # --- Open path selection (doc 08 section 8) ---
-        #
-        # limit_trigger takes its own branch and NEVER falls back to the
-        # sequential loop below: if the EA is unavailable or refuses, the open
-        # fails loudly instead of silently opening in burst mode. Burst is
-        # untouched: the EA bulk path first, sequential loop as its fallback.
-        if self.state.open_mode == "limit_trigger":
-            await self._try_limit_open(moving_leg, constant_leg)
-            # _try_limit_open returns True when the open was HANDLED, which
-            # includes a definitive stop by the failure breaker. Never stamp
-            # ACTIVE over a symbol that was just stopped.
-            if self.running and self.state.phase != "IDLE":
-                self.state.phase = "ACTIVE"
-                await self._save_symbol_state()
-            return
-
-        # --- Try the EA bulk path first (plan E.2/E.4); the sequential loop
-        # below is the untouched fallback, selected when EA status is
-        # unavailable or healthy() fails at cycle start. ---
-        if await self._try_bulk_open(moving_leg, constant_leg):
+        # Parallel limit-trigger is the sole opening path. It never falls
+        # back to a market/burst open when the EA is unavailable.
+        await self._try_limit_open(moving_leg, constant_leg)
+        if self.running and self.state.phase != "IDLE":
             self.state.phase = "ACTIVE"
             await self._save_symbol_state()
-            return
+        return
 
         # Open all moving-side positions, each with its TP/SL slot (1-based, no
         # two positions share a slot). Lots above MAX_LOT_PER_ASSET are split
@@ -916,7 +894,7 @@ class QueuedCloseStrategyEngine:
                     f"[LIMIT] STOPPED: {n} consecutive failed opens on "
                     f"{self.mt5_symbol} (limit {limit}). Last reason: "
                     f"{detail}. Not retrying — widen entry_offset, lower the "
-                    f"counts, or switch this symbol back to Burst mode.")
+                    f"counts, then restart the symbol.")
                 return True
 
             self.activity_log.log_error(
@@ -1024,15 +1002,14 @@ class QueuedCloseStrategyEngine:
         Returns ("OK", None) on success, ("REARM", reason) for ARM_TIMEOUT, or
         ("FAIL", reason) for anything else. Never falls back to sequential.
         """
-        # 1. EA must be available -- limit_trigger refuses rather than
-        #    silently opening in burst mode (doc 08 section 5).
+        # The EA is required for the parallel pending-ladder opening path.
         if (not _bulk_available or self.ea_bridge is None
                 or self.ea_status is None
                 or not self.ea_status.get("available")):
             return "FAIL", (
                 "EA_UNAVAILABLE: "
                 f"{self.ea_status.get('reason') if self.ea_status else 'not provisioned'}"
-                " — limit_trigger will not fall back to burst/sequential")
+                " — parallel opening will not fall back to market orders")
         if not await self.ea_bridge.healthy():
             return "FAIL", "EA_UNHEALTHY: not answering a ping"
         # An EA older than the repo source is fine for burst but predates the
@@ -1042,8 +1019,8 @@ class QueuedCloseStrategyEngine:
             return "FAIL", (
                 f"EA_STALE: attached EA is v{self.ea_status.get('version')} "
                 "but this build needs a newer one — recompile WTExecutor.mq5 "
-                "and reattach the EA; limit_trigger will not fall back to "
-                "burst/sequential")
+                "and reattach the EA; parallel opening will not fall back "
+                "to market orders")
 
         info = mt5.symbol_info(self.mt5_symbol)
         tick = mt5.symbol_info_tick(self.mt5_symbol)
@@ -1081,8 +1058,7 @@ class QueuedCloseStrategyEngine:
 
         # 4. Preflight -- loud failure, nothing placed.
         try:
-            bulk_orders.preflight_limit(self.mt5_symbol, plan, levels,
-                                        self.state.burst_mode)
+            bulk_orders.preflight_limit(self.mt5_symbol, plan, levels)
         except bulk_orders.LimitPreflightError as e:
             self.activity_log.log_error(f"[LIMIT] preflight refused: {e}")
             return "FAIL", f"PREFLIGHT_FAIL: {e}"
@@ -1106,7 +1082,6 @@ class QueuedCloseStrategyEngine:
                 armed_timeout_ms=self.state.armed_timeout_seconds * 1000,
                 win_fill_deadline_ms=self.state.win_fill_deadline_ms,
                 cancel_ack_deadline_ms=self.state.cancel_ack_deadline_ms,
-                burst_mode=self.state.burst_mode,
                 cmd_id=cmd_id,
                 on_phase=self._log_limit_phase)
         except Exception as e:
@@ -1383,7 +1358,6 @@ class QueuedCloseStrategyEngine:
             "realized_pnl": self.state.realized_pnl,
             "graceful_stop": self.graceful_stop,
             "is_resetting": self.state.phase == "RESETTING",
-            "open_mode": self.state.open_mode,
             "armed": self._limit_armed or self.state.phase == "ARMED",
             "consecutive_open_failures": self._consecutive_open_failures,
             "step": self.state.cycle_count,
@@ -1659,9 +1633,7 @@ class QueuedCloseStrategyEngine:
             "realized_pnl": self.state.realized_pnl,
             "moving_lot": self.state.moving_lot,
             "constant_lot": self.state.constant_lot,
-            "open_mode": self.state.open_mode,
             "entry_offset": self.state.entry_offset,
-            "burst_mode": self.state.burst_mode,
             "win_fill_deadline_ms": self.state.win_fill_deadline_ms,
             "cancel_ack_deadline_ms": self.state.cancel_ack_deadline_ms,
             "armed_timeout_seconds": self.state.armed_timeout_seconds,
@@ -1800,9 +1772,7 @@ class QueuedCloseStrategyEngine:
         self.state.constant_closed_count = int(metadata.get("constant_closed_count", 0) or 0)
         self.state.moving_lot = float(metadata.get("moving_lot", 0.01) or 0.01)
         self.state.constant_lot = float(metadata.get("constant_lot", 0.01) or 0.01)
-        self.state.open_mode = metadata.get("open_mode", "burst")
         self.state.entry_offset = float(metadata.get("entry_offset", 50.0) or 50.0)
-        self.state.burst_mode = metadata.get("burst_mode", "AFTER_CANCEL")
         self.state.win_fill_deadline_ms = int(
             metadata.get("win_fill_deadline_ms", 1500) or 1500)
         self.state.cancel_ack_deadline_ms = int(

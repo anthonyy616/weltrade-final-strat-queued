@@ -3,6 +3,9 @@ import os
 import sys
 import signal
 import logging
+import re
+import threading
+import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -67,6 +70,41 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger("main")
+
+
+class StatusAccessLogFilter(logging.Filter):
+    """Keep status polling visible without repeating it every second."""
+
+    _status_request = re.compile(r'"GET /status(?:\?[^\s"]*)? HTTP/[^"]+"')
+
+    def __init__(self, interval_seconds: float = 300.0):
+        super().__init__()
+        self.interval_seconds = interval_seconds
+        self._last_emitted = 0.0
+        self._suppressed = 0
+        self._lock = threading.Lock()
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        if self._status_request.search(message) is None:
+            return True
+
+        now = time.monotonic()
+        with self._lock:
+            if self._last_emitted and now - self._last_emitted < self.interval_seconds:
+                self._suppressed += 1
+                return False
+            suppressed = self._suppressed
+            self._suppressed = 0
+            self._last_emitted = now
+
+        if suppressed:
+            record.msg = f"{message} [suppressed {suppressed} similar GET /status lines]"
+            record.args = ()
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(StatusAccessLogFilter())
 
 # --- Import App ---
 from api.server import app

@@ -24,13 +24,6 @@ MAX_POSITION_COUNT = 500
 
 CONSTANT_SIDES = ("buy", "sell")
 
-# Open mode (doc 08 §4). "burst" stays the default; an unrecognised value degrades
-# to "burst", never to "limit_trigger" — a typo must not silently arm a new mode.
-OPEN_MODES = ("burst", "limit_trigger")
-
-# Burst timing for the limit_trigger mode (doc 08 §4).
-BURST_MODES = ("AFTER_CANCEL", "PARALLEL")
-
 # Ranges for the global limit-trigger settings (doc 08 §4).
 ARMED_TIMEOUT_RANGE = (10, 3600)
 MS_DEADLINE_RANGE = (100, 60000)
@@ -59,10 +52,8 @@ def get_default_symbol_config() -> Dict[str, Any]:
         "grid_distance": 50.0,
         "moving_freq": 10.0,
         "constant_freq": 8.0,
-        # Limit-trigger open mode (doc 08 §4). entry_offset is in price units,
-        # the same unit as grid_distance; the stops/spread floor is applied at
-        # arm time, not here.
-        "open_mode": "burst",
+        # entry_offset is in price units, the same unit as grid_distance; the
+        # stops/spread floor is applied at arm time, not here.
         "entry_offset": 50.0,
     }
 
@@ -75,7 +66,6 @@ def get_default_global_config() -> Dict[str, Any]:
         "armed_timeout_seconds": 120,
         "win_fill_deadline_ms": 1500,
         "cancel_ack_deadline_ms": 1500,
-        "burst_mode": "AFTER_CANCEL",
         "max_consecutive_open_failures": 3,
     }
 
@@ -145,8 +135,9 @@ class ConfigManager:
         self._validate_global_fields()
         for symbol in list(self.config.get("symbols", {}).keys()):
             sym = self.config["symbols"][symbol]
-            # Strip Grid Bounce fields entirely — presence invites misuse
-            for field in REMOVED_CONFIG_FIELDS:
+            # Strip retired fields entirely. In particular, old open_mode
+            # values must not select a different opening behavior.
+            for field in REMOVED_CONFIG_FIELDS + ["open_mode"]:
                 sym.pop(field, None)
             # Fill any missing new fields with defaults
             for field, default in get_default_symbol_config().items():
@@ -167,6 +158,8 @@ class ConfigManager:
         warnings: List[str] = []
         defaults = get_default_global_config()
         gbl = self.config["global"]
+        # Retire the old mode switch while accepting existing config files.
+        gbl.pop("burst_mode", None)
 
         # Fill any key missing from an older config file with its default.
         for field, default in defaults.items():
@@ -204,14 +197,6 @@ class ConfigManager:
         _int_in_range("win_fill_deadline_ms", MS_DEADLINE_RANGE)
         _int_in_range("cancel_ack_deadline_ms", MS_DEADLINE_RANGE)
         _int_in_range("max_consecutive_open_failures", MAX_FAILURES_RANGE)
-
-        # burst_mode: strict whitelist, degrade to the safe default.
-        mode = gbl.get("burst_mode")
-        if mode not in BURST_MODES:
-            warnings.append(
-                f"invalid burst_mode '{mode}' (must be "
-                f"{' or '.join(BURST_MODES)}), reset to AFTER_CANCEL")
-            gbl["burst_mode"] = "AFTER_CANCEL"
 
         for w in warnings:
             print(f"[CONFIG] global: {w}")
@@ -277,16 +262,6 @@ class ConfigManager:
             sym["constant_freq"] = sym["moving_freq"] - 1.0
             if sym["constant_freq"] <= 0:
                 sym["constant_freq"] = get_default_symbol_config()["constant_freq"]
-
-        # open_mode: strict whitelist. An unknown value degrades to "burst" —
-        # never to "limit_trigger" (doc 08 §4).
-        mode = sym.get("open_mode")
-        if mode not in OPEN_MODES:
-            warnings.append(
-                f"invalid open_mode '{mode}' (must be 'burst' or 'limit_trigger'), "
-                "reset to burst"
-            )
-            sym["open_mode"] = "burst"
 
         # entry_offset: must be a usable positive, finite price distance. The
         # stops/spread floor is applied at arm time regardless of what is

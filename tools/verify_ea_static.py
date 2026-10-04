@@ -157,7 +157,7 @@ def main():
     check("RemovePendings filters on symbol", "ORDER_SYMBOL" in body)
     check("RemovePendings filters on magic", "ORDER_MAGIC" in body)
     init_body = src[src.index("int SweepPendingsAllSymbols("):]
-    init_body = init_body[:init_body.index("double HeaderDouble(")]
+    init_body = init_body[:init_body.index("\n}\n", init_body.index("{")) + 3]
     # It reads ORDER_SYMBOL only to build the remove request; it must never
     # FILTER on it. A filter would look like "if(OrderGetString(ORDER_SYMBOL)..."
     # or an ORDER_SYMBOL comparison.
@@ -255,7 +255,9 @@ def main():
     cancel = cancel[:cancel.index("void StartBurst(")]
     check("losing-ladder cancel never touches the triggered lane",
           "LaneOfOpposite(arm_trigger_side" in cancel
-          and "if(arm_req_lane[s][mi] != losing) continue;" in cancel)
+          and "losing_type" in cancel
+          and "ORDER_TYPE_BUY_LIMIT" in cancel
+          and "ORDER_TYPE_SELL_LIMIT" in cancel)
     check("burst fires the contingent side for the triggered scenario",
           "arm_trigger_side[mi] == LANE_PB" in src and "lane == LANE_CS" in src
           and "lane == LANE_CB" in src)

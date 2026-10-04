@@ -12,8 +12,8 @@ are errors, paste them here and I'll fix them, since I haven't been able to comp
 this myself.
 
 If a compile fails at startup, the server log prints the compiler's actual error
-lines rather than a bare "compile failed", and the bot falls back to opening
-positions one at a time. It never opens in limit mode with a broken EA.
+lines rather than a bare "compile failed". The parallel path refuses to arm
+with a broken EA; it never silently changes order behavior.
 
 Back in MT5, make sure Algo Trading is on. The toolbar button should be green with
 a play icon. Also check Tools > Options > Expert Advisors and tick "Allow
@@ -29,28 +29,17 @@ on the Common tab. A smiley face in the chart's top-right corner means the EA is
 active.
 
 If the EA answers but reports an older version than the repo source, the server
-prints a warning and limit mode refuses to arm (burst still works). That means a
-stale build is attached: recompile and reattach.
+prints a warning and the parallel path refuses to arm. That means a stale build
+is attached: recompile and reattach.
 
-## 2. Open modes
+## 2. Parallel limit-trigger opening
 
-Each symbol picks its own open mode. `Burst` is the default and is unchanged.
-
-**Burst** fires every order at market in one batch. Cheap and immediate, but each
-order fills at whatever the price is when it lands, so a ladder can fill spread
-across several prices. Those entry prices are what the cycle's target math is
-anchored on, so dispersion carries straight into the targets.
-
-**Limit trigger** places both ladders as pending limit orders around the current
-price and waits. When one side fills, the EA cancels the losing ladder first and
-then bursts the contingent opposite side. Everything fills at the trigger price
-instead of wherever the market happened to be, which is the whole point: tighter
-entries mean the target math holds.
-
-Limit mode needs the EA. If the EA is unavailable, unhealthy, or too old, the open
-fails loudly and the symbol is retried then stopped by the circuit breaker. It never
-quietly falls back to burst or to the one-at-a-time fallback, because an open that
-quietly changes shape is worse than one that stops.
+Every symbol uses the same parallel limit-trigger path. The EA places both
+pending ladders around the current price. When either side fills, it immediately
+cancels every remaining pending limit on the opposite side, re-checks until the
+opposite side is clear (or the deadline expires), and only then releases the
+contingent market orders. If the EA is unavailable, unhealthy, or too old, the
+open fails loudly and the symbol is retried then stopped by the circuit breaker.
 
 ## 3. New settings
 
@@ -58,7 +47,6 @@ Per symbol, next to the existing buy/sell counts and lots:
 
 | Setting | Meaning | Default |
 | --- | --- | --- |
-| Open Mode | `Burst` or `Limit Trigger` | `Burst` |
 | Entry Offset | How far either side of the current mid price the ladders sit, in points | 50 |
 
 Global, under the limit-trigger block:
@@ -68,10 +56,9 @@ Global, under the limit-trigger block:
 | Armed Timeout | How long to wait for a trigger before re-arming, in seconds | 120 | 10-3600 |
 | Win Fill Deadline | How long the triggered ladder has to finish filling, in ms | 1500 | 100-60000 |
 | Cancel Ack Deadline | How long the losing ladder's cancel has to confirm, in ms | 1500 | 100-60000 |
-| Burst Mode | `AFTER_CANCEL` cancels first, then bursts. `PARALLEL` bursts at once | `AFTER_CANCEL` | |
 | Max Consecutive Open Failures | Failures in a row before the symbol stops | 3 | 1-100 |
 
-**Entry Offset** is only used by limit mode. It's raised automatically if the
+**Entry Offset** is used by the limit path. It's raised automatically if the
 broker's stop level or the symbol's minimum stop distance demands more room, and
 when that happens the effective offset is logged so you can see it was clamped.
 
@@ -80,16 +67,13 @@ win. If either expires the open aborts, everything pending is removed, any
 positions are closed, and the cycle restarts. Raise them on a slow or jumpy
 symbol before raising anything else.
 
-**Burst Mode** matters for spread: `AFTER_CANCEL` can re-open a ladder the price
-has already bounced away from, because by the time the cancel confirms, the level
-may be stale. `PARALLEL` avoids that but risks both sides filling. Leave it on
-`AFTER_CANCEL` unless you have a specific reason.
+## 4. Armed state
 
-## 4. Switching modes
-
-Set Open Mode on the symbol in the UI and save. It's read at the start of each
-cycle, so it takes effect on the next cycle rather than instantly. The log line
-for each cycle start states the counts and grid it is running with.
+The timing fields are safety deadlines, not mode selectors. The armed timeout
+limits how long the EA waits for the first pending fill. The win-fill deadline
+limits completion of the triggering side, and the cancel-ack deadline limits the
+opposite-side cleanup. A timeout aborts the cycle, removes pending orders, and
+lets the engine retry under its failure breaker.
 
 While a symbol is armed, the Bot State reads **Armed - waiting for trigger**. That
 means the ladders are parked and nothing is open yet. Stopping the bot while armed
@@ -102,12 +86,12 @@ comparison checklist) and `experts/LIMIT_TRIGGER_MANUAL_TEST.md` (the EA state
 machine, one test per abort path). The short version:
 
 1. Demo account, EA compiled and attached, Python bot stopped.
-2. Set one symbol to Limit Trigger, Entry Offset at or above the symbol's minimum
+2. Set one symbol's Entry Offset at or above the symbol's minimum
    stop distance, small counts (2 and 2), and lots you don't mind losing.
 3. Start the bot. Confirm the activity log shows the plan line, preflight passed,
    then `ARMED` with the placed counts matching what you configured.
-4. Wait for a trigger. You should see `TRIGGERED` with a side, then the cancel and
-   burst, then `DONE`.
+4. Wait for a trigger. You should see `TRIGGERED` with a side, cancel attempts
+   and `opposite side clear`, then the contingent burst and `DONE`.
 5. Check the open: all positions on one side, none on the other, no leftover
    pending orders.
 6. Let a full cycle close, then repeat. Do at least 30 cycles before drawing any
@@ -115,28 +99,23 @@ machine, one test per abort path). The short version:
 
 ## 6. Reading open_quality.csv
 
-One row per successful open, in both modes, at
+One row per successful limit-trigger open at
 `logs/users/{user}/sessions/open_quality.csv`. Columns:
 
-- `mode` — `burst` or `limit_trigger`.
-- `trigger_side` — `lower`, `upper`, or `n/a` for burst.
+- `mode` — `limit_trigger`.
+- `trigger_side` — `lower` or `upper`.
 - Per side (`buy_*`, `sell_*`): `orders`, `distinct_prices`, `min_price`,
   `max_price`, `modal_price`, `modal_share`, `span_ms`.
-- `trigger_to_cancel_ms`, `trigger_to_burst_ms` — EA timings, blank on burst rows.
+- `trigger_to_cancel_ms`, `trigger_to_burst_ms` — EA timings.
 
-The comparison that matters is `distinct_prices` and `modal_share`. On burst you
-should see several distinct prices per side and a modal share well below 1.00. On
+The comparison that matters is `distinct_prices` and `modal_share`. With parallel
 limit trigger you should see `distinct_prices` of 1 and a modal share of 1.00,
-because everything filled at the trigger price.
+because each contingent side is released from the same trigger event.
 
 `span_ms` is the first-to-last fill time on that side. Large burst spans are the
 visible cost of firing eight orders at market.
 
-A blank cell means "not reported", not zero. Burst rows have no EA timings because
-burst has no EA trigger, and an empty side has no counts at all.
-
-To compare the two modes properly, run 30 cycles of each on the same symbol at the
-same times of day and compare the two sets of rows. Fewer than 30 is anecdote.
+A blank cell means "not reported", not zero. An empty side has no counts at all.
 
 ## 7. EA inputs — test only
 

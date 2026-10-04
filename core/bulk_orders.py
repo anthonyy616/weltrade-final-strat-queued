@@ -426,7 +426,7 @@ def build_limit_plan(symbol, moving_side, moving_lot, constant_lot,
     }
 
 
-def preflight_limit(symbol, plan, levels, burst_mode="AFTER_CANCEL"):
+def preflight_limit(symbol, plan, levels):
     """Doc 08 section 5 preflight. Raises LimitPreflightError with a specific
     message; never silently falls back to burst mode."""
     info = mt5.symbol_info(symbol)
@@ -480,16 +480,14 @@ def preflight_limit(symbol, plan, levels, burst_mode="AFTER_CANCEL"):
                 raise LimitPreflightError(
                     f"preflight: {side} volume {vol} exceeds the {symbol} "
                     f"limit {limit}. Reduce counts or lot size.")
-        if burst_mode == "PARALLEL":
-            # Both contingent bursts sit on top of the still-live pendings.
-            burst_vol = sum(l["lot"] for l in plan["lines"]
-                            if l["role"] in ("CS", "CB"))
-            if buy_vol + sell_vol + burst_vol > limit:
-                raise LimitPreflightError(
-                    f"preflight: PARALLEL mode needs pendings ({buy_vol + sell_vol}) "
-                    f"plus burst ({burst_vol}) = {buy_vol + sell_vol + burst_vol}, "
-                    f"over the {symbol} limit {limit}. Use AFTER_CANCEL or "
-                    f"reduce counts.")
+        # Both contingent bursts sit on top of the still-live pendings.
+        burst_vol = sum(l["lot"] for l in plan["lines"]
+                        if l["role"] in ("CS", "CB"))
+        if buy_vol + sell_vol + burst_vol > limit:
+            raise LimitPreflightError(
+                f"preflight: PARALLEL mode needs pendings ({buy_vol + sell_vol}) "
+                f"plus burst ({burst_vol}) = {buy_vol + sell_vol + burst_vol}, "
+                f"over the {symbol} limit {limit}. Reduce counts.")
 
     # 5. Per-order volume after splitting.
     max_lot = MAX_LOT_PER_ASSET.get(symbol, 100)

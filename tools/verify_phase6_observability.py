@@ -178,10 +178,11 @@ def test_status_and_ui():
 
     eng = (ROOT / "core/engine/queued_close_strategy_engine.py").read_text(
         encoding="utf-8")
-    check("engine status exposes open_mode, armed and the failure count",
-          all(t in eng for t in ('"open_mode": self.state.open_mode',
-                                '"armed": self._limit_armed',
+    check("engine status exposes armed state and failure count",
+          all(t in eng for t in ('"armed": self._limit_armed',
                                 '"consecutive_open_failures"')))
+    check("engine status no longer exposes retired open_mode",
+          '"open_mode": self.state.open_mode' not in eng)
 
     print("\n[5] UI shows the armed state")
     ui = (ROOT / "static/index.html").read_text(encoding="utf-8")

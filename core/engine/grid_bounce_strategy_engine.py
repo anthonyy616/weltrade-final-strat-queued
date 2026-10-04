@@ -26,18 +26,18 @@ MAX_LOT_PER_ASSET = {
     "SFX Vol 80": 2,
     "SFX Vol 99": 2,
 }
-
+#Volume Limit
 MAX_VOLUME_PER_ASSET = {
     "FX Vol 20": 12,
     "FX Vol 40": 4,
-    "FX Vol 60": ,
-    "FX Vol 80": 0.1,
-    "FX Vol 99": 0.4,
-    "SFX Vol 20": 0.5,
-    "SFX Vol 40": 0.1,
-    "SFX Vol 60": 0.1,
-    "SFX Vol 80": 0.2,
-    "SFX Vol 99": 0.2,
+    "FX Vol 60": 13,
+    "FX Vol 80": 6,
+    "FX Vol 99": 8,
+    "SFX Vol 20": 27,
+    "SFX Vol 40": 4,
+    "SFX Vol 60": 1,
+    "SFX Vol 80": 3,
+    "SFX Vol 99": 119,
 }
 
 MIN_STOP_PIPS_PER_ASSET = {

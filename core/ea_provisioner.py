@@ -37,11 +37,8 @@ class EAStatus:
     available: bool
     version: Optional[str] = None
     reason: str = ""
-    # True when an EA answered but is older than the repo source. It may still
-    # be perfectly good for burst mode, so it is NOT a failure -- but it cannot
-    # run limit_trigger, because it predates the ARMLIMIT command. Surfaced so
-    # the engine can refuse that mode loudly instead of arming into an EA that
-    # never answers.
+    # True when an EA answered but is older than the repo source. It is
+    # surfaced so the server can require recompilation before trading.
     stale: bool = False
 
 

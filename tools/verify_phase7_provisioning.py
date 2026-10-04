@@ -149,15 +149,16 @@ def test_password_hygiene():
 
 def test_docs():
     print("\n[4] mq5_run.md covers what phase 7 asks for")
-    check("documents both open modes",
-          "Burst" in DOC and "Limit trigger" in DOC)
+    check("documents the parallel limit-trigger path",
+          "Parallel limit-trigger opening" in DOC
+          and "opposite side" in DOC)
     check("documents the new per-symbol fields",
-          "Open Mode" in DOC and "Entry Offset" in DOC)
+          "Entry Offset" in DOC and "buy/sell counts" in DOC)
     check("documents every new global field",
           all(t in DOC for t in ("Armed Timeout", "Win Fill Deadline",
-                                 "Cancel Ack Deadline", "Burst Mode",
+                                 "Cancel Ack Deadline",
                                  "Max Consecutive Open Failures")))
-    check("documents how to switch modes", "Switching modes" in DOC)
+    check("documents the armed state", "## 4. Armed state" in DOC)
     check("gives the demo test steps", "Demo test steps" in DOC)
     check("documents reading open_quality.csv",
           "open_quality.csv" in DOC and "modal_share" in DOC)

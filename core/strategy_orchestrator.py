@@ -7,6 +7,8 @@ import asyncio
 import time
 from core.engine.queued_close_strategy_engine import QueuedCloseStrategyEngine as QCStrategy
 from core.session_logger import SessionLogger
+from core.bulk_orders import MAGIC_NUMBER
+from core.run_state import run_state_manager
 
 
 class StrategyOrchestrator:
@@ -137,132 +139,132 @@ class StrategyOrchestrator:
 
     async def terminate_all(self):
         """
-        Nuclear reset - close all positions for ALL active symbols.
-        Robust implementation: Continues even if one strategy fails.
+        Nuclear reset independent of the in-memory strategy registry.
+
+        The registry is only an optimization: after a restart, strategies may
+        not have been instantiated while their EA-owned orders are still live.
+        Discover every symbol in config and in the terminal, cancel our
+        pendings, close our positions, and verify the account is clear.
         """
-        print(f"[TERMINATE ALL] Terminating {len(self.strategies)} symbols...")
         self.session_logger.log_button("Terminate All")
-        
-        if not self.strategies:
-            print("[TERMINATE ALL] No active strategies to terminate.")
-            return
-        
-        # [FIX] Define safe wrapper to ensure all tasks attempt to run
-        async def safe_terminate(name, strat):
+        import MetaTrader5 as mt5
+        configured = set(self.config_manager.get_enabled_symbols())
+        symbols = configured | set(self.strategies)
+        positions = list(mt5.positions_get() or ())
+        orders = list(mt5.orders_get() or ())
+        symbols |= {p.symbol for p in positions if p.magic == MAGIC_NUMBER}
+        symbols |= {o.symbol for o in orders if o.magic == MAGIC_NUMBER}
+        initial_positions = sum(p.magic == MAGIC_NUMBER for p in positions)
+        initial_pending = sum(o.magic == MAGIC_NUMBER for o in orders)
+
+        holder = getattr(__import__("core.bot_manager", fromlist=["BotManager"]),
+                         "BotManager", None)
+        bridge = getattr(holder, "_last_instance", None)
+        bridge = getattr(bridge, "ea_bridge", None)
+
+        # Stop the EA arm machines before touching positions, otherwise a
+        # trigger can create a fresh position during the close pass.
+        if bridge is not None:
+            await asyncio.gather(*(
+                bridge.abort_arm(symbol, MAGIC_NUMBER) for symbol in symbols
+            ), return_exceptions=True)
+
+        async def terminate_registered(strategy):
             try:
-                await strat.terminate()
-                close_fn = getattr(strat, "close", None)
-                if close_fn is not None:
-                    await close_fn()
-                return True
-            except Exception as e:
-                print(f"[ERROR] Failed to terminate {name}: {e}")
-                return False
+                await strategy.terminate()
+            except Exception as exc:
+                print(f"[TERMINATE ALL] strategy cleanup failed: {exc}")
 
-        tasks = [safe_terminate(name, strategy) for name, strategy in self.strategies.items()]
-        
-        if tasks:
-            # Use return_exceptions=True implicitly via safe wrapper
-            # But utilizing gather ensures parallel execution
-            await asyncio.gather(*tasks)
+        await asyncio.gather(*(terminate_registered(s)
+                               for s in list(self.strategies.values())))
 
-        # The strategies are gone now, so remember which symbols had pendings
-        # before dropping the references. Per-strategy terminate() already
-        # swept its own symbol; this covers symbols whose strategy object was
-        # never created but whose pendings survived (doc 08 section 8).
-        await self._sweep_all_pendings()
-
-        self.strategies.clear()
-        self.active_symbols.clear()
-        
-        # [NUCLEAR FALLBACK] Scan entire account for ANY remaining positions and close them
-        # This handles orphaned positions from symbols that are no longer in 'strategies'
-        import MetaTrader5 as mt5
-        all_positions = mt5.positions_get()
-        if all_positions:
-            print(f"[TERMINATE ALL] Found {len(all_positions)} residual positions on account. Closing (Nuclear)...")
-            count = 0
-            for pos in all_positions:
-                # Construct generic close request
-                tick = mt5.symbol_info_tick(pos.symbol)
-                if not tick:
-                    continue
-                
-                close_type = mt5.ORDER_TYPE_SELL if pos.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
-                close_price = tick.bid if close_type == mt5.ORDER_TYPE_SELL else tick.ask
-                
-                request = {
-                    "action": mt5.TRADE_ACTION_DEAL,
-                    "symbol": pos.symbol,
-                    "position": pos.ticket,
-                    "volume": pos.volume,
-                    "type": close_type,
-                    "price": close_price,
-                    "deviation": 50,
-                    "magic": pos.magic,
-                    "comment": "Terminate-All",
-                }
-                
-                res = mt5.order_send(request)
-                if res and res.retcode == mt5.TRADE_RETCODE_DONE:
-                    count += 1
-                else:
-                    print(f"[ERROR] Failed to close orphan {pos.ticket} ({pos.symbol}): {res.comment if res else 'Unknown'}")
-            print(f"[TERMINATE ALL] Cleaned up {count} residual positions.")
-
-        print("[TERMINATE ALL] All strategies terminated (or attempted).")
-
-    async def _sweep_all_pendings(self):
-        """Remove any pending order carrying our magic, grouped by symbol.
-
-        Sweeps stay symbol+magic scoped even here: the magic is shared across
-        symbols, so a single magic-wide removal would be one symbol's sweep
-        cancelling another's. Reading orders_get account-wide is only used to
-        discover WHICH symbols still have pendings.
-        """
-        import MetaTrader5 as mt5
-        from core.bulk_orders import MAGIC_NUMBER
-
-        try:
-            orders = mt5.orders_get() or ()
-        except Exception as e:
-            print(f"[TERMINATE ALL] could not list pending orders: {e}")
-            return
-
-        symbols = {o.symbol for o in orders if o.magic == MAGIC_NUMBER}
-        if not symbols:
-            return
-
-        from core.bot_manager import BotManager
-        holder = getattr(BotManager, "_last_instance", None)
-        bridge = getattr(holder, "ea_bridge", None) if holder else None
-
-        for sym in sorted(symbols):
-            count = sum(1 for o in orders if o.symbol == sym
-                        and o.magic == MAGIC_NUMBER)
-            print(f"[TERMINATE ALL] sweeping {count} pending order(s) on {sym}")
-            if bridge is None:
-                # No bridge: remove directly, symbol+magic scoped.
-                for o in orders:
-                    if o.symbol != sym or o.magic != MAGIC_NUMBER:
-                        continue
+        deadline = time.monotonic() + 15.0
+        while True:
+            orders = list(mt5.orders_get() or ())
+            mine_orders = [o for o in orders if o.magic == MAGIC_NUMBER]
+            for symbol in {o.symbol for o in mine_orders} | symbols:
+                if bridge is not None:
                     try:
+                        await bridge.cancel_all_pendings(symbol, MAGIC_NUMBER,
+                                                         deadline_s=2.0)
+                    except Exception:
+                        pass
+                else:
+                    for order in mine_orders:
+                        if order.symbol != symbol:
+                            continue
                         mt5.order_send({
                             "action": mt5.TRADE_ACTION_REMOVE,
-                            "symbol": sym,
-                            "position": o.ticket,
-                            "magic": MAGIC_NUMBER,
-                            "comment": "term-all-sweep",
+                            "symbol": symbol, "position": order.ticket,
+                            "magic": MAGIC_NUMBER, "comment": "terminate-all",
                         })
-                    except Exception as e:
-                        print(f"[TERMINATE ALL] remove #{o.ticket} on {sym} "
-                              f"failed: {e}")
-            else:
-                try:
-                    await bridge.cancel_all_pendings(sym, MAGIC_NUMBER,
-                                                     deadline_s=10.0)
-                except Exception as e:
-                    print(f"[TERMINATE ALL] sweep of {sym} raised: {e}")
+
+            positions = list(mt5.positions_get() or ())
+            mine_positions = [p for p in positions if p.magic == MAGIC_NUMBER]
+            by_symbol = {}
+            for position in mine_positions:
+                by_symbol.setdefault(position.symbol, []).append(position)
+            for symbol, items in by_symbol.items():
+                tickets = [p.ticket for p in items]
+                closed = False
+                if bridge is not None:
+                    try:
+                        await bridge.close_tickets(symbol, MAGIC_NUMBER, tickets)
+                        live = {p.ticket for p in (mt5.positions_get(symbol=symbol) or ())
+                                if p.magic == MAGIC_NUMBER}
+                        closed = not live.intersection(tickets)
+                    except Exception:
+                        pass
+                if not closed:
+                    for position in items:
+                        tick = mt5.symbol_info_tick(symbol)
+                        if not tick:
+                            continue
+                        close_type = (mt5.ORDER_TYPE_SELL if position.type == mt5.ORDER_TYPE_BUY
+                                      else mt5.ORDER_TYPE_BUY)
+                        mt5.order_send({
+                            "action": mt5.TRADE_ACTION_DEAL, "symbol": symbol,
+                            "position": position.ticket, "volume": position.volume,
+                            "type": close_type,
+                            "price": tick.bid if close_type == mt5.ORDER_TYPE_SELL else tick.ask,
+                            "deviation": 50, "magic": MAGIC_NUMBER,
+                            "comment": "Terminate-All",
+                        })
+
+            await asyncio.sleep(0.25)
+            remaining_orders = [o for o in (mt5.orders_get() or ())
+                                if o.magic == MAGIC_NUMBER]
+            remaining_positions = [p for p in (mt5.positions_get() or ())
+                                   if p.magic == MAGIC_NUMBER]
+            if not remaining_orders and not remaining_positions:
+                break
+            if time.monotonic() >= deadline:
+                break
+
+        # Clear persisted arm/run state even when no strategy was registered.
+        if bridge is not None:
+            try:
+                bridge.clear_limit_phase_files()
+            except Exception:
+                pass
+        run_state_manager.set_stopped(self.user_id)
+        self.strategies.clear()
+        self.active_symbols.clear()
+        leftovers = {
+            "pending": len([o for o in (mt5.orders_get() or ())
+                            if o.magic == MAGIC_NUMBER]),
+            "positions": len([p for p in (mt5.positions_get() or ())
+                              if p.magic == MAGIC_NUMBER]),
+        }
+        return {
+            "initial_pending": initial_pending,
+            "initial_positions": initial_positions,
+            "cancelled_pending": initial_pending - leftovers["pending"],
+            "closed_positions": initial_positions - leftovers["positions"],
+            "leftover_pending": leftovers["pending"],
+            "leftover_positions": leftovers["positions"],
+            "timed_out": bool(leftovers["pending"] or leftovers["positions"]),
+        }
 
     async def close(self):
         """Release any open resources held by strategies and repositories."""

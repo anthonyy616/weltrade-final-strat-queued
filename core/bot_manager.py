@@ -1,4 +1,5 @@
 import uuid
+import asyncio
 from typing import Dict, Optional
 from core.config_manager import ConfigManager
 from core.strategy_orchestrator import StrategyOrchestrator
@@ -7,6 +8,7 @@ class BotManager:
     def __init__(self):
         # Maps user_id -> StrategyOrchestrator
         self.bots: Dict[str, StrategyOrchestrator] = {}
+        self._creation_locks: Dict[str, asyncio.Lock] = {}
         # EA bulk-open support (plan phase E): injected by the server startup
         # hook; every strategy created afterwards receives these references.
         self.ea_bridge = None
@@ -29,32 +31,25 @@ class BotManager:
         Retrieves an existing bot orchestrator for the user, or creates a new one 
         if the server restarted or it doesn't exist.
         """
-        # 1. Return existing instance if in memory
-        if user_id in self.bots:
-            return self.bots[user_id]
-        
-        # 2. Re-initialize bot for this user (restores config from DB/File)
-        print(f"[BOT] Restoring/Creating bot session for User: {user_id}")
-        config_manager = ConfigManager(user_id=user_id)
-        
-        # Initialize Strategy Orchestrator with user_id for session logging
-        orchestrator = StrategyOrchestrator(config_manager, user_id=user_id)
+        lock = self._creation_locks.setdefault(user_id, asyncio.Lock())
+        async with lock:
+            if user_id in self.bots:
+                return self.bots[user_id]
 
-        # Reconcile live MT5 positions against persisted state before any ticker sync.
-        await orchestrator.reconcile_strategies_on_startup()
+            print(f"[BOT] Restoring/Creating bot session for User: {user_id}")
+            config_manager = ConfigManager(user_id=user_id)
+            orchestrator = StrategyOrchestrator(config_manager, user_id=user_id)
 
-        # Propagate EA bridge/status to any strategies just created
-        if self.ea_bridge is not None:
-            for strategy in orchestrator.strategies.values():
-                strategy.ea_bridge = self.ea_bridge
-                strategy.ea_status = self.ea_status
+            await orchestrator.reconcile_strategies_on_startup()
 
-        # Start Ticker (Passive) - Actually for Orchestrator this syncs strategies
-        await orchestrator.start_ticker()
-        
-        # Store in memory
-        self.bots[user_id] = orchestrator
-        return orchestrator
+            if self.ea_bridge is not None:
+                for strategy in orchestrator.strategies.values():
+                    strategy.ea_bridge = self.ea_bridge
+                    strategy.ea_status = self.ea_status
+
+            await orchestrator.start_ticker()
+            self.bots[user_id] = orchestrator
+            return orchestrator
 
     def get_bot(self, user_id: str) -> Optional[StrategyOrchestrator]:
         return self.bots.get(user_id)

@@ -168,7 +168,6 @@ class EABridge:
                         armed_timeout_ms=120000,
                         win_fill_deadline_ms=1500,
                         cancel_ack_deadline_ms=1500,
-                        burst_mode="AFTER_CANCEL",
                         on_phase=None,
                         overall_timeout_s=None,
                         armed_slack_s=5.0,
@@ -201,7 +200,6 @@ class EABridge:
             f"armed_timeout_ms={int(armed_timeout_ms)}",
             f"win_fill_deadline_ms={int(win_fill_deadline_ms)}",
             f"cancel_ack_deadline_ms={int(cancel_ack_deadline_ms)}",
-            f"burst_mode={burst_mode}",
         ]
 
         # The ack is quick; the armed window is not, so the ack gets its own
@@ -329,3 +327,15 @@ class EABridge:
                 f"[LIMIT] direct pending sweep removed {len(removed)}/"
                 f"{len(pending)} on {symbol}")
             await asyncio.sleep(0.2)
+
+    def clear_limit_phase_files(self):
+        """Remove persisted arm phase files after an explicit global reset."""
+        self._paths()
+        removed = 0
+        for path in self.dir.glob(f"{PHASE_FILE_PREFIX}*{PHASE_FILE_EXT}"):
+            try:
+                path.unlink()
+                removed += 1
+            except OSError:
+                continue
+        return removed
