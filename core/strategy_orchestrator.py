@@ -195,7 +195,7 @@ class StrategyOrchestrator:
                             continue
                         mt5.order_send({
                             "action": mt5.TRADE_ACTION_REMOVE,
-                            "symbol": symbol, "position": order.ticket,
+                            "symbol": symbol, "order": order.ticket,
                             "magic": MAGIC_NUMBER, "comment": "terminate-all",
                         })
 

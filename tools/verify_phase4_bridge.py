@@ -51,7 +51,7 @@ def _install_mt5_stub(pending):
 
     def order_send(req):
         if req.get("action") == m.TRADE_ACTION_REMOVE:
-            tkt = req.get("position")
+            tkt = req.get("order")
             REMOVED.append((req.get("symbol"), tkt))
             for o in list(pending):
                 if o.ticket == tkt:

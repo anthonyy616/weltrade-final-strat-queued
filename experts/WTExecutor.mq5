@@ -411,7 +411,10 @@ int RemovePendings(const string sym, const long mg, int mi)
       ZeroMemory(rq); ZeroMemory(rs);
       rq.action   = TRADE_ACTION_REMOVE;
       rq.symbol   = sym;
-      rq.position = tkt;
+      // TRADE_ACTION_REMOVE identifies a pending order with `order`.
+      // `position` is for closing an open position and yields retcode 10013
+      // (INVALID) on pending-order removal.
+      rq.order    = tkt;
       rq.magic    = mg;
       rq.comment  = "arm-sweep";
       if(!OrderSendAsync(rq, rs))
@@ -443,7 +446,7 @@ int SweepPendingsAllSymbols(const long mg)
       ZeroMemory(rq); ZeroMemory(rs);
       rq.action   = TRADE_ACTION_REMOVE;
       rq.symbol   = sym;
-      rq.position = tkt;
+      rq.order    = tkt;
       rq.magic    = mg;
       rq.comment  = "init-sweep";
       if(OrderSendAsync(rq, rs)) submitted++;
@@ -621,7 +624,7 @@ void SendCancelRemoves(int mi)
       ZeroMemory(rq); ZeroMemory(rs);
       rq.action   = TRADE_ACTION_REMOVE;
       rq.symbol   = arm_symbol[mi];
-      rq.position = tkt;
+      rq.order    = tkt;
       rq.magic    = arm_magic[mi];
       rq.comment  = "cancel-arm";
       if(OrderSendAsync(rq, rs))
@@ -1020,13 +1023,12 @@ void ServiceArmMachines()
             continue;
          }
 
-         // Winner must have finished filling.
-         int wi = LaneIndex(arm_trigger_side[i]);
-         if(wi >= 0 && arm_fill[i][wi] >= arm_exp[i][wi]) arm_win_done[i] = true;
-
-         // Burst only after the winning ladder is complete AND the losing
-         // ladder's removes have all resolved.
-         if(arm_win_done[i] && arm_rem_pending[i] <= 0)
+         // The first fill is the trigger. Do not wait for every order on the
+         // winning ladder: the required sequence is cancel the opposite
+         // ladder, then release the contingent burst. Waiting for the whole
+         // winner ladder caused a single fill to expire as WINNER_SHORT.
+         int opposite_remaining = CountOppositePendings(i);
+         if(opposite_remaining == 0 && arm_rem_pending[i] <= 0)
          {
             // "Order not found" on a remove means that order may have filled,
             // so confirm against deals before bursting (doc 08 section 9).
@@ -1038,7 +1040,6 @@ void ServiceArmMachines()
                continue;
             }
             arm_t_cancel[i] = GetMicrosecondCount();
-            int opposite_remaining = CountOppositePendings(i);
             if(opposite_remaining == 0)
                Log("[LIMIT] opposite side clear id=" + arm_cmdid[i]);
             else
@@ -1052,12 +1053,6 @@ void ServiceArmMachines()
             && arm_rem_pending[i] > 0)
          {
             AbortMachine(i, "CANCEL_FAIL");
-            continue;
-         }
-         // Winner not complete in time -> the price bounced.
-         if(arm_win_deadline[i] > 0 && !arm_win_done[i] && now >= arm_win_deadline[i])
-         {
-            AbortMachine(i, "WINNER_SHORT");
             continue;
          }
          continue;

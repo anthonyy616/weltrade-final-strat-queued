@@ -323,7 +323,7 @@ class TradingEngine:
                         mt5_direct.order_send({
                             "action": mt5_direct.TRADE_ACTION_REMOVE,
                             "symbol": sym,
-                            "position": o.ticket,
+                            "order": o.ticket,
                             "magic": MAGIC_NUMBER,
                             "comment": "hardstop-sweep",
                         })

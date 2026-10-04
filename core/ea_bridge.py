@@ -307,7 +307,7 @@ class EABridge:
                         res = mt5.order_send({
                             "action": mt5.TRADE_ACTION_REMOVE,
                             "symbol": symbol,
-                            "position": tkt,
+                            "order": tkt,
                             "magic": magic,
                             "comment": "py-sweep",
                         })

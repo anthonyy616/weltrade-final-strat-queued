@@ -824,7 +824,7 @@ class QueuedCloseStrategyEngine:
                 mt5.order_send({
                     "action": mt5.TRADE_ACTION_REMOVE,
                     "symbol": self.mt5_symbol,
-                    "position": tkt,
+                    "order": tkt,
                     "magic": self.MAGIC_NUMBER,
                     "comment": "eng-sweep",
                 })
