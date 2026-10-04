@@ -499,16 +499,36 @@ def preflight_limit(symbol, plan, levels, burst_mode="AFTER_CANCEL"):
                 f"preflight: order lot {l['lot']} exceeds the per-order cap "
                 f"{max_lot} for {symbol} after splitting (tag {l['tag']})")
 
-    # 6. Moving-side TP/SL must respect the minimum stop distance.
-    #    _check_min_stops wants "buy"/"sell"; plan lines carry "B"/"S".
-    _SIDE_WORD = {"B": "buy", "S": "sell"}
+    # 6. Validate stops for the pending ladders against their pending entry
+    #    levels. Contingent CS/CB orders are not sent until a trigger occurs,
+    #    so checking their future stops against today's market price rejects
+    #    valid plans when the market is still between the two trigger levels.
+    min_dist = max(
+        float(MIN_STOP_PIPS_PER_ASSET.get(symbol, 10)) * point,
+        max(float(getattr(info, "trade_stops_level", 0) or 0), 10.0) * point,
+    )
     for l in plan["lines"]:
-        if l["tp"] == 0.0 and l["sl"] == 0.0:
+        if l["role"] not in ("PB", "PS") or (l["tp"] == 0.0 and l["sl"] == 0.0):
             continue
-        err = _check_min_stops(symbol, _SIDE_WORD.get(l["side"], l["side"]),
-                               l["tp"], l["sl"])
-        if err:
-            raise LimitPreflightError(f"preflight: {err} ({symbol} {l['role']})")
+        entry = plan["lower"] if l["role"] == "PB" else plan["upper"]
+        if l["side"] == "B":
+            if l["tp"] and l["tp"] - entry < min_dist:
+                raise LimitPreflightError(
+                    f"preflight: buy TP {l['tp']} within {min_dist} of "
+                    f"pending entry {entry} ({symbol} {l['role']})")
+            if l["sl"] and entry - l["sl"] < min_dist:
+                raise LimitPreflightError(
+                    f"preflight: buy SL {l['sl']} within {min_dist} of "
+                    f"pending entry {entry} ({symbol} {l['role']})")
+        else:
+            if l["tp"] and entry - l["tp"] < min_dist:
+                raise LimitPreflightError(
+                    f"preflight: sell TP {l['tp']} within {min_dist} of "
+                    f"pending entry {entry} ({symbol} {l['role']})")
+            if l["sl"] and l["sl"] - entry < min_dist:
+                raise LimitPreflightError(
+                    f"preflight: sell SL {l['sl']} within {min_dist} of "
+                    f"pending entry {entry} ({symbol} {l['role']})")
 
     return True
 
