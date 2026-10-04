@@ -490,8 +490,26 @@ void MarkDeal(int mi, const ulong deal, const int lane)
 int CountEntryDeal(int mi, const ulong deal, const ulong order)
 {
    int lane = LaneOfTicket(mi, order);
-   if(lane == LANE_NONE) return LANE_NONE;
-   if(DealSeen(mi, deal)) return lane;
+   if(lane == LANE_NONE)
+   {
+      Log("[LIMIT] deal ignored: order ticket=" +
+         IntegerToString((long)order) +
+         " deal=" + IntegerToString((long)deal) +
+         " symbol=" + arm_symbol[mi] +
+         " state=" + IntegerToString(arm_state[mi]) +
+         " cmd=" + arm_cmdid[mi] +
+         " tracked ticket not found");
+      return LANE_NONE;
+   }
+   if(DealSeen(mi, deal))
+   {
+      Log("[LIMIT] deal duplicate ignored: deal=" +
+         IntegerToString((long)deal) +
+         " order=" + IntegerToString((long)order) +
+         " lane=" + IntegerToString(lane) +
+         " cmd=" + arm_cmdid[mi]);
+      return lane;
+   }
    MarkDeal(mi, deal, lane);
    Log("[LIMIT] fill id=" + arm_cmdid[mi] + " symbol=" + arm_symbol[mi]
        + " lane=" + IntegerToString(lane) + " order=" + IntegerToString((long)order));
@@ -1257,6 +1275,12 @@ void OnTradeTransaction(const MqlTradeTransaction &t,
             arm_req_done[s][mi] = true;
             arm_req_ticket[s][mi] = rs.order;
             int lane = arm_req_lane[s][mi];
+            Log("[LIMIT] request resolved id=" + arm_cmdid[mi]
+                + " request=" + IntegerToString((long)rs.request_id)
+                + " order=" + IntegerToString((long)rs.order)
+                + " lane=" + IntegerToString(lane)
+                + " retcode=" + IntegerToString((int)rs.retcode)
+                + " state=" + IntegerToString(arm_state[mi]));
             if(rs.retcode == TRADE_RETCODE_DONE)
             {
                if(lane == LANE_REM)
@@ -1295,7 +1319,16 @@ void OnTradeTransaction(const MqlTradeTransaction &t,
       for(int mi = 0; mi < MAX_ARM_MACHINES; mi++)
       {
          if(arm_state[mi] == ARM_IDLE) continue;
-         if(t.symbol != arm_symbol[mi]) continue;
+         if(t.symbol != arm_symbol[mi])
+         {
+            Log("[LIMIT] deal ignored: symbol mismatch deal="
+                + IntegerToString((long)t.deal)
+                + " order=" + IntegerToString((long)t.order)
+                + " observed=" + t.symbol
+                + " expected=" + arm_symbol[mi]
+                + " cmd=" + arm_cmdid[mi]);
+            continue;
+         }
          // The deal must be an ENTRY. HistoryDealSelect inside the transaction
          // handler is unverified on this broker, so fall back to counting it
          // when the lookup fails (a DEAL_ADD for a tracked pending ladder order
@@ -1304,8 +1337,27 @@ void OnTradeTransaction(const MqlTradeTransaction &t,
          if(HistoryDealSelect(t.deal))
          {
             // MqlTradeTransaction has no magic field: read it off the deal.
-            if(HistoryDealGetInteger(t.deal, DEAL_MAGIC) != arm_magic[mi]) continue;
-            if(HistoryDealGetInteger(t.deal, DEAL_ENTRY) != DEAL_ENTRY_IN) is_entry = false;
+            long deal_magic = HistoryDealGetInteger(t.deal, DEAL_MAGIC);
+            long deal_entry = HistoryDealGetInteger(t.deal, DEAL_ENTRY);
+            if(deal_magic != arm_magic[mi])
+            {
+               Log("[LIMIT] deal ignored: magic mismatch deal="
+                   + IntegerToString((long)t.deal)
+                   + " order=" + IntegerToString((long)t.order)
+                   + " observed_magic=" + IntegerToString(deal_magic)
+                   + " expected_magic=" + IntegerToString(arm_magic[mi])
+                   + " cmd=" + arm_cmdid[mi]);
+               continue;
+            }
+            if(deal_entry != DEAL_ENTRY_IN)
+            {
+               Log("[LIMIT] deal ignored: not an entry deal="
+                   + IntegerToString((long)t.deal)
+                   + " order=" + IntegerToString((long)t.order)
+                   + " entry=" + IntegerToString(deal_entry)
+                   + " cmd=" + arm_cmdid[mi]);
+               is_entry = false;
+            }
          }
          else
          {
@@ -1313,7 +1365,15 @@ void OnTradeTransaction(const MqlTradeTransaction &t,
             Log("[LIMIT] HistoryDealSelect failed for deal " + IntegerToString((long)t.deal)
                 + " (fallbacks so far: " + IntegerToString(arm_dealscan_fail[mi]) + ")");
          }
-         if(is_entry) ArmOnEntryDeal(mi, t.deal, t.order);
+         if(is_entry)
+         {
+            Log("[LIMIT] deal classified as entry: deal="
+                + IntegerToString((long)t.deal)
+                + " order=" + IntegerToString((long)t.order)
+                + " cmd=" + arm_cmdid[mi]
+                + " state=" + IntegerToString(arm_state[mi]));
+            ArmOnEntryDeal(mi, t.deal, t.order);
+         }
          break;
       }
    }
