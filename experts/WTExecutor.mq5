@@ -634,8 +634,15 @@ void SendCancelRemoves(int mi)
       rq.comment  = "cancel-arm";
       if(OrderSendAsync(rq, rs))
       {
-         ArmTrack(mi, rs.request_id, LANE_REM);
-         arm_rem_pending[mi]++;
+         // Count only requests that are actually tracked.  A submitted
+         // request without a tracking slot cannot decrement rem_pending and
+         // must not wedge the machine until CANCEL_FAIL.
+         if(ArmTrack(mi, rs.request_id, LANE_REM) >= 0)
+            arm_rem_pending[mi]++;
+         else
+            Log("[LIMIT] cancel request untracked id=" + arm_cmdid[mi]
+                + " ticket=" + IntegerToString((long)tkt)
+                + " request=" + IntegerToString((long)rs.request_id));
          sent++;
          Log("[LIMIT] cancel attempt id=" + arm_cmdid[mi]
              + " ticket=" + IntegerToString((long)tkt)
@@ -662,6 +669,14 @@ void StartBurst(int mi)
    if(arm_burst_started[mi]) return;
    arm_burst_started[mi] = true;
    arm_state[mi] = ARM_BURSTING;
+   // The command contains both contingent scenarios, but only the lane
+   // matching the trigger is sent.  The expected count must describe the
+   // selected scenario or the machine will retry a complete burst forever.
+   arm_burst_exp[mi] = 0;
+   int selected_lane = (arm_trigger_side[mi] == LANE_PB)
+                       ? LANE_CS : LANE_CB;
+   for(int s = 0; s < arm_bl_count[mi]; s++)
+      if(arm_bl_lane[s][mi] == selected_lane) arm_burst_exp[mi]++;
    arm_burst_ok[mi] = 0;
    arm_burst_sent[mi] = 0;
    SendBurstPass(mi);
