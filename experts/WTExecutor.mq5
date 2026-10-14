@@ -524,13 +524,13 @@ int CountEntryDeal(int mi, const ulong deal, const ulong order)
    int lane = LaneOfTicket(mi, order);
    if(lane == LANE_NONE)
    {
-      Log("[LIMIT] deal ignored: order ticket=" +
-         IntegerToString((long)order) +
-         " deal=" + IntegerToString((long)deal) +
-         " symbol=" + arm_symbol[mi] +
-         " state=" + IntegerToString(arm_state[mi]) +
-         " cmd=" + arm_cmdid[mi] +
-         " tracked ticket not found");
+      // Log("[LIMIT] deal ignored: order ticket=" +
+      //   IntegerToString((long)order) +
+      //   " deal=" + IntegerToString((long)deal) +
+      //   " symbol=" + arm_symbol[mi] +
+      //   " state=" + IntegerToString(arm_state[mi]) +
+      //   " cmd=" + arm_cmdid[mi] +
+      //   " tracked ticket not found");
       return LANE_NONE;
    }
    if(DealSeen(mi, deal))
@@ -1477,12 +1477,12 @@ void OnTradeTransaction(const MqlTradeTransaction &t,
          if(arm_state[mi] == ARM_IDLE) continue;
          if(t.symbol != arm_symbol[mi])
          {
-            Log("[LIMIT] deal ignored: symbol mismatch deal="
-                + IntegerToString((long)t.deal)
-                + " order=" + IntegerToString((long)t.order)
-                + " observed=" + t.symbol
-                + " expected=" + arm_symbol[mi]
-                + " cmd=" + arm_cmdid[mi]);
+            // Log("[LIMIT] deal ignored: symbol mismatch deal="
+            //    + IntegerToString((long)t.deal)
+            //    + " order=" + IntegerToString((long)t.order)
+            //    + " observed=" + t.symbol
+            //    + " expected=" + arm_symbol[mi]
+            //    + " cmd=" + arm_cmdid[mi]);
             continue;
          }
          // The deal must be an ENTRY. HistoryDealSelect inside the transaction
@@ -1497,21 +1497,21 @@ void OnTradeTransaction(const MqlTradeTransaction &t,
             long deal_entry = HistoryDealGetInteger(t.deal, DEAL_ENTRY);
             if(deal_magic != arm_magic[mi])
             {
-               Log("[LIMIT] deal ignored: magic mismatch deal="
-                   + IntegerToString((long)t.deal)
-                   + " order=" + IntegerToString((long)t.order)
-                   + " observed_magic=" + IntegerToString(deal_magic)
-                   + " expected_magic=" + IntegerToString(arm_magic[mi])
-                   + " cmd=" + arm_cmdid[mi]);
+               // Log("[LIMIT] deal ignored: magic mismatch deal="
+               //    + IntegerToString((long)t.deal)
+               //    + " order=" + IntegerToString((long)t.order)
+               //    + " observed_magic=" + IntegerToString(deal_magic)
+               //    + " expected_magic=" + IntegerToString(arm_magic[mi])
+               //    + " cmd=" + arm_cmdid[mi]);
                continue;
             }
             if(deal_entry != DEAL_ENTRY_IN)
             {
-               Log("[LIMIT] deal ignored: not an entry deal="
-                   + IntegerToString((long)t.deal)
-                   + " order=" + IntegerToString((long)t.order)
-                   + " entry=" + IntegerToString(deal_entry)
-                   + " cmd=" + arm_cmdid[mi]);
+               // Log("[LIMIT] deal ignored: not an entry deal="
+               //    + IntegerToString((long)t.deal)
+               //    + " order=" + IntegerToString((long)t.order)
+               //    + " entry=" + IntegerToString(deal_entry)
+               //    + " cmd=" + arm_cmdid[mi]);
                is_entry = false;
             }
          }
