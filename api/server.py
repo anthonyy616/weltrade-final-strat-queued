@@ -27,6 +27,7 @@ load_dotenv()
 from core.ea_bridge import EABridge
 from core.ea_provisioner import ensure_ea_ready
 from core.ea_log_tail import EALogTail
+from core.bulk_orders import MAX_VOLUME_PER_ASSET
 
 # Shared EA status; the strategy reads this to pick bulk vs sequential.
 ea_bridge = EABridge()
@@ -195,6 +196,12 @@ async def health_check():
 async def get_config(bot = Depends(get_current_bot)):
     """Get full multi-asset config"""
     return bot.config
+
+
+@app.get("/limits")
+async def get_limits(bot = Depends(get_current_bot)):
+    """Return the authoritative per-symbol volume limits used by preflight."""
+    return {"volume_per_asset": MAX_VOLUME_PER_ASSET}
 
 @app.post("/config")
 async def update_config(config: ConfigUpdate, bot = Depends(get_current_bot)):

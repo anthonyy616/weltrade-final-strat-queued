@@ -1157,7 +1157,18 @@ void ServiceArmMachines()
          int wi = LaneIndex(arm_trigger_side[i]);
          if(wi >= 0 && arm_fill[i][wi] >= arm_exp[i][wi]) arm_win_done[i] = true;
 
-         if(arm_burst_sent[i] > 0) continue;   // still waiting on burst replies
+         // A missing asynchronous request callback must not wedge the machine
+         // indefinitely. The winner deadline starts at the trigger and bounds
+         // both contingent-order replies and completion of the winner ladder.
+         if(arm_burst_sent[i] > 0)
+         {
+            if(arm_win_deadline[i] > 0 && now >= arm_win_deadline[i])
+            {
+               AbortMachine(i, "BURST_TIMEOUT");
+               continue;
+            }
+            continue;   // still waiting on burst replies
+         }
 
          bool burst_ok = arm_burst_ok[i] >= arm_burst_exp[i];
          if(!burst_ok && arm_burst_pass[i] < 2)

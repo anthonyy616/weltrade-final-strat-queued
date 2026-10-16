@@ -99,8 +99,13 @@ class StatusAccessLogFilter(logging.Filter):
             self._last_emitted = now
 
         if suppressed:
-            record.msg = f"{message} [suppressed {suppressed} similar GET /status lines]"
-            record.args = ()
+            # Keep Uvicorn's original five access-log arguments intact. Its
+            # formatter unpacks those arguments directly, so replacing them
+            # with an empty tuple causes a formatting error.
+            record.msg = (
+                f"{record.msg} "
+                f"[suppressed {suppressed} similar GET /status lines]"
+            )
         return True
 
 

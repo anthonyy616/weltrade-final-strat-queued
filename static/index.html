@@ -486,19 +486,9 @@
             chart: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="h-4 w-4 inline-block mr-1 text-purple-500"><path stroke-linecap="round" stroke-linejoin="round" d="M3 3v18h18"/></svg>`
         };
 
-        // Asset volume limits (frontend simulation only)
-        const ASSET_VOLUME_LIMITS = {
-            "FX Vol 20": 14,
-            "FX Vol 40": 6,
-            "FX Vol 60": 14,
-            "FX Vol 80": 9,
-            "FX Vol 99": 6,
-            "SFX Vol 20": 18,
-            "SFX Vol 40": 7,
-            "SFX Vol 60": 2,
-            "SFX Vol 80": 2,
-            "SFX Vol 99": 34,
-        };
+        // Loaded from the same MAX_CONFIGS.json-backed endpoint used by the
+        // backend preflight. Never duplicate symbol limits in the UI.
+        let ASSET_VOLUME_LIMITS = {};
 
         // Simulation debounce timers per asset
         const _simulateTimers = {};
@@ -537,8 +527,10 @@
             if (!popup) return;
             const sym = popup.querySelector('.vw-symbol');
             const fld = popup.querySelector('.vw-field');
+            const detail = popup.querySelector('.vw-detail');
             if (sym) sym.textContent = symbol;
             if (fld) fld.textContent = fieldLabel;
+            if (detail) detail.textContent = fieldLabel;
             popup.classList.remove('hidden');
         }
 
@@ -547,7 +539,72 @@
             if (popup) popup.classList.add('hidden');
         }
 
-        async function simulateVolumeAccumulation(symbol, safeId) { }
+        function formatVolume(value) {
+            return Number(value).toFixed(2).replace(/\.?0+$/, '');
+        }
+
+        function getVolumeInputs(symbol, safeId) {
+            const read = (suffix) => {
+                const value = parseFloat(document.getElementById(`sym_${safeId}_${suffix}`)?.value);
+                return Number.isFinite(value) && value >= 0 ? value : 0;
+            };
+            return {
+                buyCount: read('buy_count'),
+                sellCount: read('sell_count'),
+                buyLot: read('buy_lot'),
+                sellLot: read('sell_lot'),
+                limit: Number(ASSET_VOLUME_LIMITS[symbol]),
+            };
+        }
+
+        function validateSymbolVolume(symbol, safeId, showWarning = true) {
+            const values = getVolumeInputs(symbol, safeId);
+            if (!Number.isFinite(values.limit) || values.limit <= 0) return true;
+
+            // The limit-trigger plan keeps both pending ladders and the
+            // contingent burst available, so each side is counted twice.
+            const pendingVolume = values.buyCount * values.buyLot
+                + values.sellCount * values.sellLot;
+            const plannedVolume = pendingVolume * 2;
+            const valid = plannedVolume <= values.limit + 1e-9;
+            const warning = document.getElementById(`sym_${safeId}_volume_warning`);
+
+            if (valid) {
+                if (warning) warning.classList.add('hidden');
+                return true;
+            }
+
+            const balancedMax = values.buyLot + values.sellLot > 0
+                ? Math.floor(
+                    (values.limit / (2 * (values.buyLot + values.sellLot))) + 1e-9
+                ) : 0;
+            const maxBuyWithSell = Math.max(0, Math.floor(
+                ((values.limit / 2 - values.sellCount * values.sellLot)
+                    / Math.max(values.buyLot, Number.EPSILON)) + 1e-9
+            ));
+            const maxSellWithBuy = Math.max(0, Math.floor(
+                ((values.limit / 2 - values.buyCount * values.buyLot)
+                    / Math.max(values.sellLot, Number.EPSILON)) + 1e-9
+            ));
+            const message =
+                `${symbol} will not work with these settings. ` +
+                `They require ${formatVolume(plannedVolume)} lots, but the ` +
+                `maximum is ${formatVolume(values.limit)} lots. ` +
+                `For equal counts, use at most ${balancedMax} positions per ` +
+                `side at the current lot sizes. Keeping the other side fixed, ` +
+                `the maximum is ${maxBuyWithSell} buys or ${maxSellWithBuy} sells.`;
+
+            if (warning) {
+                warning.textContent = message;
+                warning.classList.remove('hidden');
+            }
+            if (showWarning) _showVolumeWarning(symbol, message);
+            return false;
+        }
+
+        async function simulateVolumeAccumulation(symbol, safeId) {
+            validateSymbolVolume(symbol, safeId);
+        }
 
         function safeIdFromSymbol(symbol) {
             return symbol.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '');
@@ -713,6 +770,12 @@
             }
             copyConfigFrom(sourceSymbol, copyTargets);
             const payload = buildConfigPayload();
+            const invalid = Object.entries(payload.symbols || {}).find(([symbol, cfg]) =>
+                cfg.enabled && !validateSymbolVolume(symbol, safeIdFromSymbol(symbol)));
+            if (invalid) {
+                log(`Lot setup not saved: volume limit exceeded for ${invalid[0]}.`);
+                return;
+            }
             await saveConfigPayload(payload);
             document.getElementById('copy-step-1')?.classList.add('hidden');
             document.getElementById('copy-step-2')?.classList.add('hidden');
@@ -756,6 +819,9 @@
                 if (!payload) return;
                 const anyEnabled = Object.values(payload.symbols || {}).some(s => s.enabled);
                 if (!anyEnabled) return;
+                const invalid = Object.entries(payload.symbols || {}).find(([symbol, cfg]) =>
+                    cfg.enabled && !validateSymbolVolume(symbol, safeIdFromSymbol(symbol), true));
+                if (invalid) return;
                 await saveConfigPayload(payload);
             }, delayMs);
         }
@@ -767,6 +833,12 @@
             // Ensure at least one enabled symbol
             const anyEnabled = Object.values(payload.symbols || {}).some(s => s.enabled);
             if (!anyEnabled) { alert('Please select at least one asset!'); return; }
+            const invalid = Object.entries(payload.symbols || {}).find(([symbol, cfg]) =>
+                cfg.enabled && !validateSymbolVolume(symbol, safeIdFromSymbol(symbol)));
+            if (invalid) {
+                log(`Configuration not saved: volume limit exceeded for ${invalid[0]}.`);
+                return;
+            }
             const updated = await apiCall('/config', 'POST', payload);
             if (updated) {
                 currentConfig = updated;
@@ -1157,6 +1229,12 @@
 
         // --- 2. Config Load/Save/Render ---
         async function loadConfig() {
+            const limits = await apiCall('/limits');
+            if (limits?.volume_per_asset) {
+                ASSET_VOLUME_LIMITS = limits.volume_per_asset;
+            } else {
+                log("Could not load authoritative volume limits.");
+            }
             const cfg = await apiCall('/config');
             if (cfg) {
                 currentConfig = cfg;
@@ -1264,22 +1342,22 @@
                     <div class="grid grid-cols-2 gap-1.5">
                         <div>
                             <label class="block text-[10px] text-gray-500 mb-0">Buy Count</label>
-                            <input type="number" id="sym_${safe}_buy_count" value="${cfg.buy_count ?? 5}" min="1" oninput="scheduleAutoSave()" onfocus="setLastInteracted('${symbol}', '${safe}')"
+                            <input type="number" id="sym_${safe}_buy_count" value="${cfg.buy_count ?? 5}" min="1" oninput="setLastInteracted('${symbol}', '${safe}'); scheduleAutoSave()"
                                 class="w-full p-1.5 text-sm rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
                         </div>
                         <div>
                             <label class="block text-[10px] text-gray-500 mb-0">Sell Count</label>
-                            <input type="number" id="sym_${safe}_sell_count" value="${cfg.sell_count ?? 5}" min="1" oninput="scheduleAutoSave()" onfocus="setLastInteracted('${symbol}', '${safe}')"
+                            <input type="number" id="sym_${safe}_sell_count" value="${cfg.sell_count ?? 5}" min="1" oninput="setLastInteracted('${symbol}', '${safe}'); scheduleAutoSave()"
                                 class="w-full p-1.5 text-sm rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
                         </div>
                         <div>
                             <label class="block text-[10px] text-gray-500 mb-0">Buy Lot</label>
-                            <input type="number" step="0.01" id="sym_${safe}_buy_lot" value="${cfg.buy_lot ?? 0.01}" min="0.01" oninput="scheduleAutoSave()" onfocus="setLastInteracted('${symbol}', '${safe}')"
+                            <input type="number" step="0.01" id="sym_${safe}_buy_lot" value="${cfg.buy_lot ?? 0.01}" min="0.01" oninput="setLastInteracted('${symbol}', '${safe}'); scheduleAutoSave()"
                                 class="w-full p-1.5 text-sm rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
                         </div>
                         <div>
                             <label class="block text-[10px] text-gray-500 mb-0">Sell Lot</label>
-                            <input type="number" step="0.01" id="sym_${safe}_sell_lot" value="${cfg.sell_lot ?? 0.01}" min="0.01" oninput="scheduleAutoSave()" onfocus="setLastInteracted('${symbol}', '${safe}')"
+                            <input type="number" step="0.01" id="sym_${safe}_sell_lot" value="${cfg.sell_lot ?? 0.01}" min="0.01" oninput="setLastInteracted('${symbol}', '${safe}'); scheduleAutoSave()"
                                 class="w-full p-1.5 text-sm rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
                         </div>
                         <div>
@@ -1311,6 +1389,9 @@
                                 class="w-full p-1.5 text-sm rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
                         </div>
                     </div>
+                    <div id="sym_${safe}_volume_warning"
+                        class="hidden text-[11px] leading-relaxed text-red-700 dark:text-red-300 bg-red-100 dark:bg-red-900/30 border border-red-300 dark:border-red-700 rounded p-2">
+                    </div>
                     <div class="text-[10px] leading-relaxed text-slate-500 dark:text-slate-400">
                         <strong>Per-symbol settings:</strong> Counts are the number of positions opened per side;
                         lots are the volume of each position. Constant Side identifies the side kept as the
@@ -1333,6 +1414,10 @@
 
             if (enabledSymbols.length === 0) {
                 container.innerHTML = '<p class="text-xs text-slate-400 text-center py-2">No assets enabled yet — tick some indices above.</p>';
+            } else {
+                for (const [symbol] of enabledSymbols) {
+                    validateSymbolVolume(symbol, safeIdFromSymbol(symbol), false);
+                }
             }
         }
 
@@ -1398,8 +1483,8 @@
         class="fixed right-4 bottom-4 bg-red-600 text-white p-3 rounded shadow-lg hidden z-50 max-w-sm">
         <div class="flex items-start gap-3">
             <div class="flex-1">
-                <div class="text-sm">Volume limit exceeded for <span class="font-semibold vw-symbol"></span></div>
-                <div class="text-xs opacity-90">Field: <span class="vw-field font-medium"></span></div>
+                <div class="text-sm font-semibold">Volume limit exceeded for <span class="vw-symbol"></span></div>
+                <div class="text-xs opacity-90 mt-1 vw-field"></div>
             </div>
             <div class="flex-shrink-0">
                 <button onclick="_hideVolumeWarning()" class="text-white/90 hover:text-white">Dismiss</button>
