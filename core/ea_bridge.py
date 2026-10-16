@@ -12,6 +12,7 @@ logger = logging.getLogger("ea")
 # never be mistaken for the current one.
 PHASE_FILE_PREFIX = "wt_arm_"
 PHASE_FILE_EXT = ".txt"
+TERMINAL_PHASE_FILE_PREFIX = "wt_arm_terminal_"
 
 # Interim phases (the EA may report several before settling). DONE and ABORT
 # are terminal.
@@ -148,6 +149,11 @@ class EABridge:
         self._paths()
         return self.dir / f"{PHASE_FILE_PREFIX}{cmd_id}{PHASE_FILE_EXT}"
 
+    def terminal_phase_file_path(self, cmd_id):
+        self._paths()
+        return self.dir / (
+            f"{TERMINAL_PHASE_FILE_PREFIX}{cmd_id}{PHASE_FILE_EXT}")
+
     @staticmethod
     def _read_phase(path):
         """Read a phase file non-destructively. Returns None when it does not
@@ -210,6 +216,7 @@ class EABridge:
                 f"EA refused to arm {symbol}: {ack.get('reason', 'unknown')}")
 
         phase_path = self.phase_file_path(rid)
+        terminal_phase_path = self.terminal_phase_file_path(rid)
         armed_deadline = time.monotonic() + (
             armed_timeout_ms / 1000.0) + armed_slack_s
         overall = (overall_timeout_s if overall_timeout_s is not None else
@@ -221,6 +228,9 @@ class EABridge:
         last_phase = None
         while True:
             data = self._read_phase(phase_path)
+            terminal_data = self._read_phase(terminal_phase_path)
+            if terminal_data and terminal_data.get("phase") in TERMINAL_PHASES:
+                data = terminal_data
             if data and data.get("phase") != last_phase:
                 last_phase = data["phase"]
                 last = data
@@ -238,7 +248,8 @@ class EABridge:
                 # The EA may have completed the terminal phase immediately
                 # before this polling pass. Re-read once before converting a
                 # successful arm into a destructive failure path.
-                final_data = self._read_phase(phase_path)
+                final_data = (self._read_phase(terminal_phase_path)
+                              or self._read_phase(phase_path))
                 if final_data and final_data.get("phase") in TERMINAL_PHASES:
                     logger.info(
                         f"[LIMIT] {symbol} cmd={rid} phase="
@@ -344,6 +355,13 @@ class EABridge:
         self._paths()
         removed = 0
         for path in self.dir.glob(f"{PHASE_FILE_PREFIX}*{PHASE_FILE_EXT}"):
+            try:
+                path.unlink()
+                removed += 1
+            except OSError:
+                continue
+        for path in self.dir.glob(
+                f"{TERMINAL_PHASE_FILE_PREFIX}*{PHASE_FILE_EXT}"):
             try:
                 path.unlink()
                 removed += 1

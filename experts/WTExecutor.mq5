@@ -1,4 +1,4 @@
-#property version "1.70"
+#property version "1.8.1"
 #property description "Command-driven async order executor (queued-close bot)"
 
 input int InpPollMs      = 5;     // how often to look for a command file
@@ -13,13 +13,14 @@ input bool TestUnfillableWinner = false; // TEST ONLY: winner never completes
 #define CMD_FILE "wt_cmd.txt"
 #define RES_FILE "wt_res.txt"
 #define RES_TMP  "wt_res.tmp"
-#define WT_EA_VERSION "1.8"
+#define WT_EA_VERSION "1.8.1"
 #define LOG_FILE  "wt_ea.log"
 
 // Per-symbol phase files. The name carries the command id so a stale file from
 // an earlier cycle can never be mistaken for this one (doc 08 section 6).
 #define PFX      "wt_arm_"
 #define PFX_EXT  ".txt"
+#define TERMINAL_PFX "wt_arm_terminal_"
 
 #define MAX_ARM_MACHINES 4
 #define ARM_SLOTS 4096         // total tracked lines per arm (supports up to 2000 final positions)
@@ -324,6 +325,12 @@ void WritePhase(int mi, const string phase, const string reason)
    // collide with another phase write and leave the bridge polling an older
    // phase even though the EA log reports the new one.
    WriteAtomic(arm_pfile[mi], arm_pfile[mi] + ".tmp", s);
+   // Keep terminal outcomes in a separate, command-specific receipt. The
+   // mutable phase file can be observed during a replacement or cleanup;
+   // this receipt remains authoritative for DONE/ABORT.
+   if(phase == "DONE" || phase == "ABORT")
+      WriteAtomic(TERMINAL_PFX + arm_cmdid[mi] + PFX_EXT,
+                  TERMINAL_PFX + arm_cmdid[mi] + PFX_EXT + ".tmp", s);
    Log("[LIMIT] phase id=" + arm_cmdid[mi] + " symbol=" + arm_symbol[mi]
        + " phase=" + phase + (reason == "" ? "" : " reason=" + reason)
        + " pb=" + IntegerToString(arm_ok[mi][0]) + "/" + IntegerToString(arm_exp[mi][0])

@@ -97,12 +97,15 @@ async def fake_ea(folder, rid_phases, stop_event, accept=True, reason="ARMING"):
                 "version=1.3\n", encoding="ascii")
             for i, ph in enumerate(rid_phases):
                 pf = Path(folder) / f"wt_arm_{rid}.txt"
-                pf.write_text(
+                body = (
                     f"id={rid}\nsymbol={symbol}\nmagic=123456\nphase={ph}\n"
                     f"reason={'' if ph != 'ABORT' else 'ARM_TIMEOUT'}\n"
                     "lower=990.00000\nupper=1010.00000\n"
-                    "t_arm_us=1\nt_trigger_us=2\nt_cancel_us=3\nt_burst_us=4\n",
-                    encoding="ascii")
+                    "t_arm_us=1\nt_trigger_us=2\nt_cancel_us=3\nt_burst_us=4\n")
+                pf.write_text(body, encoding="ascii")
+                if ph in ("DONE", "ABORT"):
+                    (Path(folder) / f"wt_arm_terminal_{rid}.txt").write_text(
+                        body, encoding="ascii")
                 await asyncio.sleep(0.02)
             stop_event.set()
         await asyncio.sleep(0.005)
@@ -171,7 +174,54 @@ async def main():
     check("abort reason surfaced", result.get("reason") == "ARM_TIMEOUT",
           result.get("reason"))
 
-    print("\n[3] Rejected ack raises immediately (no polling)")
+    print("\n[3] Terminal receipt survives a missing or stale phase file")
+    uuid.uuid4 = with_id("eeee5555")
+    terminal_body = (
+        "id=eeee5555\nsymbol=FX Vol 20\nmagic=123456\nphase=DONE\n"
+        "reason=\nlower=990.00000\nupper=1010.00000\n")
+
+    async def terminal_only_ea():
+        cmd = Path(tmp) / "wt_cmd.txt"
+        res = Path(tmp) / "wt_res.txt"
+        while not cmd.exists():
+            await asyncio.sleep(0.005)
+        lines = cmd.read_text(encoding="ascii").splitlines()
+        symbol = next(x[7:] for x in lines if x.startswith("symbol="))
+        cmd.unlink(missing_ok=True)
+        res.write_text(
+            "id=eeee5555\naction=ARMLIMIT\nsymbol=" + symbol +
+            "\naccepted=1\nreason=ARMING\nversion=1.8\n",
+            encoding="ascii")
+        (Path(tmp) / "wt_arm_eeee5555.txt").write_text(
+            "id=eeee5555\nsymbol=FX Vol 20\nphase=TRIGGERED\n",
+            encoding="ascii")
+        (Path(tmp) / "wt_arm_terminal_eeee5555.txt").write_text(
+            terminal_body, encoding="ascii")
+
+    task = asyncio.create_task(terminal_only_ea())
+    result = await bridge.arm_limit("FX Vol 20", 123456, PLAN,
+                                    armed_timeout_ms=30000)
+    await task
+    check("terminal receipt wins over stale phase",
+          result["phase"] == "DONE", str(result))
+    (Path(tmp) / "wt_arm_eeee5555.txt").unlink()
+    check("terminal receipt remains after phase deletion",
+          bridge.terminal_phase_file_path("eeee5555").exists())
+
+    print("\n[4] A malformed terminal receipt does not hide a valid phase")
+    uuid.uuid4 = with_id("ffff6666")
+    stop = asyncio.Event()
+    task = asyncio.create_task(
+        fake_ea(tmp, ["ARMED", "DONE"], stop))
+    (Path(tmp) / "wt_arm_terminal_ffff6666.txt").write_text(
+        "phase=NOT_A_TERMINAL\n", encoding="ascii")
+    result = await bridge.arm_limit("FX Vol 20", 123456, PLAN,
+                                    armed_timeout_ms=30000)
+    await task
+    check("valid phase used when receipt is malformed",
+          result["phase"] == "DONE", str(result))
+
+    print("\n[5] Rejected ack raises immediately (no polling)")
     uuid.uuid4 = with_id("cccc3333")
     stop = asyncio.Event()
     task = asyncio.create_task(
@@ -188,7 +238,7 @@ async def main():
     await task
     check("rejected ack raises", raised)
 
-    print("\n[4] Deadlines: a silent EA cannot hang arm_limit")
+    print("\n[6] Deadlines: a silent EA cannot hang arm_limit")
     uuid.uuid4 = with_id("dddd4444")
     stop = asyncio.Event()
     task = asyncio.create_task(fake_ea(tmp, [], stop))
@@ -211,7 +261,7 @@ async def main():
     check("it raised within its own deadline (< 3s)", elapsed < 3.0,
           f"{elapsed:.2f}s")
 
-    print("\n[5] cancel_all_pendings: EA path then direct fallback")
+    print("\n[7] cancel_all_pendings: EA path then direct fallback")
     pending = FakeOrders()
     _install_mt5_stub(pending)
     _O = sys.modules["MetaTrader5"]._make
@@ -243,12 +293,22 @@ async def main():
           any(o.ticket == 3000 for o in pending),
           str([o.ticket for o in pending]))
 
-    print("\n[6] abort_arm falls back to the direct sweep when the EA is down")
+    print("\n[8] abort_arm falls back to the direct sweep when the EA is down")
     pending.append(_O(4000, "FX Vol 20", 123456))
     res = await bridge2.abort_arm("FX Vol 20", 123456)
     check("abort_arm returned a result", res is not None)
     check("pending swept even with the EA down",
           not [o for o in pending if o.sym == "FX Vol 20" and o.magic == 123456])
+
+    print("\n[9] Global reset clears mutable and terminal receipts")
+    stale_phase = bridge2.phase_file_path("stale111")
+    stale_terminal = bridge2.terminal_phase_file_path("stale111")
+    stale_phase.write_text("phase=ARMED\n", encoding="ascii")
+    stale_terminal.write_text("phase=DONE\n", encoding="ascii")
+    removed = bridge2.clear_limit_phase_files()
+    check("reset removes both receipt types", removed >= 2)
+    check("mutable receipt removed", not stale_phase.exists())
+    check("terminal receipt removed", not stale_terminal.exists())
 
     uuid.uuid4 = real_uuid4
     print("\n" + "=" * 62)

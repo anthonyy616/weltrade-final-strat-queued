@@ -139,6 +139,10 @@ def main():
           "void WriteAck(" in src and "void WritePhase(" in src)
     check("phase file name carries the command id",
           "PFX + cur_id + PFX_EXT" in src)
+    check("terminal receipts use a separate command-specific prefix",
+          'TERMINAL_PFX + arm_cmdid[mi] + PFX_EXT' in src)
+    check("terminal receipts are written for DONE and ABORT",
+          'phase == "DONE" || phase == "ABORT"' in src)
     check("pending orders use GTC, not FOK",
           "rq.type_time    = ORDER_TIME_GTC;" in src)
     check("pending filling policy is an input, default RETURN",
