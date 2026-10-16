@@ -13,14 +13,13 @@ input bool TestUnfillableWinner = false; // TEST ONLY: winner never completes
 #define CMD_FILE "wt_cmd.txt"
 #define RES_FILE "wt_res.txt"
 #define RES_TMP  "wt_res.tmp"
-#define WT_EA_VERSION "1.7"
+#define WT_EA_VERSION "1.8"
 #define LOG_FILE  "wt_ea.log"
 
 // Per-symbol phase files. The name carries the command id so a stale file from
 // an earlier cycle can never be mistaken for this one (doc 08 section 6).
 #define PFX      "wt_arm_"
 #define PFX_EXT  ".txt"
-#define PFX_TMP  "wt_arm.tmp"
 
 #define MAX_ARM_MACHINES 4
 #define ARM_SLOTS 4096         // total tracked lines per arm (supports up to 2000 final positions)
@@ -266,10 +265,15 @@ int ArmTrack(int mi, ulong id, int lane, int burst_index = -1,
 void WriteAtomic(const string name, const string tmp, const string body)
 {
    int h = FileOpen(tmp, FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_COMMON);
-   if(h == INVALID_HANDLE) return;
+   if(h == INVALID_HANDLE)
+   {
+      Log("[LIMIT] phase write failed opening " + tmp);
+      return;
+   }
    FileWriteString(h, body);
    FileClose(h);
-   FileMove(tmp, FILE_COMMON, name, FILE_REWRITE|FILE_COMMON);
+   if(!FileMove(tmp, FILE_COMMON, name, FILE_REWRITE|FILE_COMMON))
+      Log("[LIMIT] phase write failed moving " + tmp + " -> " + name);
 }
 
 // Immediate ack for the arm commands. Deliberately a SEPARATE writer from
@@ -316,7 +320,10 @@ void WritePhase(int mi, const string phase, const string reason)
    s += "t_burst_us=" + IntegerToString(arm_t_burst[mi]) + "\n";
    s += "elapsed_ms=" + DoubleToString(phase_start_us > 0 ? (double)(now - phase_start_us) / 1000.0 : 0.0, 2) + "\n";
    s += "version=" + WT_EA_VERSION + "\n";
-   WriteAtomic(arm_pfile[mi], PFX_TMP, s);
+   // A phase temp file must be unique per command. A shared temp filename can
+   // collide with another phase write and leave the bridge polling an older
+   // phase even though the EA log reports the new one.
+   WriteAtomic(arm_pfile[mi], arm_pfile[mi] + ".tmp", s);
    Log("[LIMIT] phase id=" + arm_cmdid[mi] + " symbol=" + arm_symbol[mi]
        + " phase=" + phase + (reason == "" ? "" : " reason=" + reason)
        + " pb=" + IntegerToString(arm_ok[mi][0]) + "/" + IntegerToString(arm_exp[mi][0])

@@ -235,6 +235,17 @@ class EABridge:
 
             now = time.monotonic()
             if now >= overall_deadline:
+                # The EA may have completed the terminal phase immediately
+                # before this polling pass. Re-read once before converting a
+                # successful arm into a destructive failure path.
+                final_data = self._read_phase(phase_path)
+                if final_data and final_data.get("phase") in TERMINAL_PHASES:
+                    logger.info(
+                        f"[LIMIT] {symbol} cmd={rid} phase="
+                        f"{final_data['phase']} (final deadline read)")
+                    if on_phase is not None and final_data.get("phase") != last_phase:
+                        on_phase(final_data)
+                    return final_data
                 raise EABridgeError(
                     f"arm_limit on {symbol} (cmd {rid}) exceeded its "
                     f"{overall:.1f}s overall deadline; last phase="
