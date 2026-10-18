@@ -14,6 +14,7 @@ import os
 import logging
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
+from typing import Optional
 from core.recovery import (
     RECOVERY_FAILED,
     RecoveryStore,
