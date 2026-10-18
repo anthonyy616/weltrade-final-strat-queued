@@ -295,6 +295,20 @@ async def _delete_db_directory(*, allow_process_kill: bool = False) -> bool:
     return not os.path.exists(db_dir)
 
 
+def _has_live_bot_state(bot) -> bool:
+    """Return whether this process still owns active strategy/broker state."""
+    if any(getattr(strategy, "running", False)
+           for strategy in getattr(bot, "strategies", {}).values()):
+        return True
+
+    import MetaTrader5 as mt5
+    from core.bulk_orders import MAGIC_NUMBER
+    positions = mt5.positions_get() or ()
+    orders = mt5.orders_get() or ()
+    return any(getattr(item, "magic", None) == MAGIC_NUMBER
+               for item in (*positions, *orders))
+
+
 async def _release_db_locks(db_path: str) -> None:
     """Terminate only the processes that currently hold the DB file open."""
     if psutil is None:
@@ -351,21 +365,27 @@ async def start_all(bot = Depends(get_current_bot)):
         "RECOVERY_FAILED", "RECOVERY_BLOCKED",
     }:
         if checkpoint.lifecycle in {RECOVERY_FAILED, "RECOVERY_BLOCKED"}:
-            if not trading_engine.running:
-                asyncio.create_task(trading_engine.start())
-            summary = await bot.reconcile_strategies_on_startup()
-            if any(result.get("blocked") for result in summary.values()):
-                raise HTTPException(
-                    status_code=409,
-                    detail={"status": checkpoint.lifecycle,
-                            "reconciliation": summary},
-                )
-            await bot.start()
-            return {"status": "reconciled", "recovery": summary}
-        raise HTTPException(
-            status_code=409,
-            detail=f"Cannot replace an active/recovering session ({checkpoint.lifecycle})",
-        )
+            if _has_live_bot_state(bot):
+                if not trading_engine.running:
+                    asyncio.create_task(trading_engine.start())
+                summary = await bot.reconcile_strategies_on_startup()
+                if any(result.get("blocked") for result in summary.values()):
+                    raise HTTPException(
+                        status_code=409,
+                        detail={"status": checkpoint.lifecycle,
+                                "reconciliation": summary},
+                    )
+                await bot.start()
+                return {"status": "reconciled", "recovery": summary}
+            print(
+                f"[START] No live strategy/broker state remains; replacing stale "
+                f"{checkpoint.lifecycle} checkpoint with a fresh session"
+            )
+        elif _has_live_bot_state(bot):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Cannot replace an active/recovering session ({checkpoint.lifecycle})",
+            )
     await _prepare_fresh_session(bot)
     deleted = await _delete_db_directory(allow_process_kill=True)
 
@@ -387,6 +407,12 @@ async def start_all(bot = Depends(get_current_bot)):
                 break
             await asyncio.sleep(0.5)
         
+    global_config = bot.config_manager.get_global_config() or {}
+    max_runtime = max(0.0, float(global_config.get("max_runtime_minutes", 0)))
+    trading_engine.begin_fresh_session(
+        getattr(bot, "user_id", ""),
+        max_runtime * 60 if max_runtime else None,
+    )
     await bot.start()
     return {"status": "started", "symbols": bot.config_manager.get_enabled_symbols()}
 

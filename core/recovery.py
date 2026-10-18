@@ -133,3 +133,8 @@ class RecoveryStore:
         self.checkpoint.graceful_stop = graceful_stop
         self.checkpoint.timeout_graceful_stop_triggered = timeout
         self.save()
+
+    def begin_fresh_session(self, user_id: str,
+                            remaining_seconds: Optional[float]) -> RecoveryCheckpoint:
+        """Replace stale lifecycle metadata for an explicitly fresh start."""
+        return self.begin_session(user_id, remaining_seconds)

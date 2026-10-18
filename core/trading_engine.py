@@ -116,6 +116,19 @@ class TradingEngine:
         """
         return init_mt5_connection()
 
+    def begin_fresh_session(self, user_id: str,
+                            remaining_seconds: Optional[float]) -> None:
+        """Start a new persisted session without restarting the MT5 loop."""
+        self._remaining_seconds = remaining_seconds
+        self.start_time = datetime.now()
+        self._last_clock_update = self.start_time
+        self._last_checkpoint_write = self.start_time
+        self.timeout_graceful_stop_triggered = False
+        self.force_stop_time = None
+        self._session_clock_paused = False
+        self.recovery_state = "RUNNING"
+        self.recovery_store.begin_fresh_session(user_id, remaining_seconds)
+
     async def _reconnect_mt5(self) -> bool:
         """
         Attempt to reconnect to MT5 with retry logic.
