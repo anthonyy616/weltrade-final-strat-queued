@@ -28,6 +28,7 @@ from core.ea_bridge import EABridge
 from core.ea_provisioner import ensure_ea_ready
 from core.ea_log_tail import EALogTail
 from core.bulk_orders import MAX_VOLUME_PER_ASSET
+from core.recovery import RECOVERY_FAILED, RecoveryStore
 
 # Shared EA status; the strategy reads this to pick bulk vs sequential.
 ea_bridge = EABridge()
@@ -189,8 +190,15 @@ async def get_env():
 @app.get("/health", status_code=200)
 @app.head("/health", status_code=200)
 async def health_check():
-    """Lightweight health check for VPS monitoring (GET/HEAD)"""
-    return {"status": "ok"}
+    """Health for both HTTP availability and the trading lifecycle."""
+    stats = trading_engine.get_stats()
+    healthy = stats["running"] and stats["recovery_state"] not in {
+        "RECOVERY_FAILED", "RECOVERY_BLOCKED"
+    }
+    return {
+        "status": "ok" if healthy else "degraded",
+        "engine": stats,
+    }
 
 @app.get("/config")
 async def get_config(bot = Depends(get_current_bot)):
@@ -245,7 +253,7 @@ async def _prepare_fresh_session(bot):
         gc.collect()
 
 
-async def _delete_db_directory() -> bool:
+async def _delete_db_directory(*, allow_process_kill: bool = False) -> bool:
     db_dir = os.path.dirname(DB_PATH) or "db"
     if not os.path.exists(db_dir):
         return True
@@ -269,6 +277,11 @@ async def _delete_db_directory() -> bool:
             if retry_count < max_retries:
                 await asyncio.sleep(0.5)
 
+    if not allow_process_kill:
+        print("[START] DB cleanup refused to terminate lock holders outside an "
+              "explicit cleanup operation")
+        return False
+    print("[START] Explicit cleanup: attempting to release identified DB lock holders")
     await _release_db_locks(DB_PATH)
     await asyncio.sleep(0.5)
 
@@ -331,9 +344,30 @@ async def _release_db_locks(db_path: str) -> None:
 
 @app.post("/control/start")
 async def start_all(bot = Depends(get_current_bot)):
-    """Start all enabled symbols - always starts with fresh DB"""
+    """Start all enabled symbols as an explicit fresh-session operation."""
+    checkpoint = RecoveryStore().checkpoint
+    if checkpoint.lifecycle in {
+        "RUNNING", "DISCONNECTED", "RECONNECTING", "RECONCILING",
+        "RECOVERY_FAILED", "RECOVERY_BLOCKED",
+    }:
+        if checkpoint.lifecycle in {RECOVERY_FAILED, "RECOVERY_BLOCKED"}:
+            if not trading_engine.running:
+                asyncio.create_task(trading_engine.start())
+            summary = await bot.reconcile_strategies_on_startup()
+            if any(result.get("blocked") for result in summary.values()):
+                raise HTTPException(
+                    status_code=409,
+                    detail={"status": checkpoint.lifecycle,
+                            "reconciliation": summary},
+                )
+            await bot.start()
+            return {"status": "reconciled", "recovery": summary}
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot replace an active/recovering session ({checkpoint.lifecycle})",
+        )
     await _prepare_fresh_session(bot)
-    deleted = await _delete_db_directory()
+    deleted = await _delete_db_directory(allow_process_kill=True)
 
     if not deleted and os.path.exists(os.path.dirname(DB_PATH) or "db"):
         raise HTTPException(
@@ -413,7 +447,7 @@ async def terminate_all(bot = Depends(get_current_bot)):
     # Remove the complete persistence directory after termination.
     db_cleaned = True
     db_warning = None
-    db_cleaned = await _delete_db_directory()
+    db_cleaned = await _delete_db_directory(allow_process_kill=True)
     if not db_cleaned:
         db_warning = "Could not delete DB directory. Please retry or restart."
     

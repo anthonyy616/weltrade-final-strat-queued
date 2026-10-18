@@ -17,6 +17,7 @@ import MetaTrader5 as mt5_module
 
 from core.engine.activity_logger import ActivityLogger
 from core.persistence.repository import Repository
+from core.recovery import RecoveryStore
 
 logger = logging.getLogger("queued_close")
 mt5: Any = mt5_module
@@ -1622,6 +1623,8 @@ class QueuedCloseStrategyEngine:
             return
         metadata = json.dumps({
             "strategy": "queued_close",
+            "owner_user_id": self.user_id,
+            "session_id": RecoveryStore().checkpoint.session_id,
             "moving_side": self.state.moving_side,
             "moving_freq": self.state.moving_freq,
             "constant_freq": self.state.constant_freq,
@@ -1671,7 +1674,8 @@ class QueuedCloseStrategyEngine:
 
         summary = {"replayed": [], "orphans": [], "stale_constant_tickets": [],
                    "cycle_restarted": False, "resumed": False,
-                   "pendings_swept": [], "armed_recovered": False}
+                   "pendings_swept": [], "armed_recovered": False,
+                   "reset_required": False, "blocked": False}
 
         # Any pending carrying our magic is removed FIRST, before anything
         # else can interact with it. Scoped to symbol+magic because the magic
@@ -1684,9 +1688,24 @@ class QueuedCloseStrategyEngine:
             self.activity_log.log_error(
                 f"[LIMIT] startup pending sweep raised on "
                 f"{self.mt5_symbol}: {e}")
+            summary["blocked"] = True
 
         state_row = await self.repository.get_state()
         persisted_phase = (state_row or {}).get("phase")
+        persisted_metadata = {}
+        if state_row and state_row.get("metadata"):
+            try:
+                persisted_metadata = json.loads(state_row["metadata"])
+            except (TypeError, ValueError):
+                summary["blocked"] = True
+        persisted_owner = persisted_metadata.get("owner_user_id")
+        if persisted_owner and persisted_owner != self.user_id:
+            self.activity_log.log_error(
+                f"[RECOVERY] owner mismatch for {self.mt5_symbol}: "
+                f"persisted={persisted_owner}, current={self.user_id}"
+            )
+            summary["blocked"] = True
+            return summary
 
         # Seed last-known prices from a live tick BEFORE replay: closure
         # direction is inferred from them when deal history is unavailable, and
@@ -1720,6 +1739,7 @@ class QueuedCloseStrategyEngine:
                     self.state.phase = "IDLE"
                     self.running = False
                     self.recovered = False
+                    summary["reset_required"] = True
                     return summary
                 if state_row and state_row.get("phase") in ("ACTIVE", "RESETTING"):
                     await self._rebuild_state_from_db(state_row)
@@ -1745,6 +1765,8 @@ class QueuedCloseStrategyEngine:
             self.running = True
             self.graceful_stop = False
             summary["resumed"] = True
+        else:
+            summary["reset_required"] = True
 
         self.activity_log.log_info(f"[RECOVERY] {summary}")
         return summary

@@ -14,6 +14,10 @@ import os
 import logging
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
+from core.recovery import (
+    RECOVERY_FAILED,
+    RecoveryStore,
+)
 
 load_dotenv()
 
@@ -63,8 +67,11 @@ class TradingEngine:
     
     # Health check interval (every N ticks)
     HEALTH_CHECK_INTERVAL = 100
-    # Max reconnection attempts before raising
-    MAX_RECONNECT_ATTEMPTS = 10
+    # Recovery is deliberately independent of the session clock:
+    # 3 attempts/hour for 3 hours, 9 attempts total.
+    MAX_RECONNECT_ATTEMPTS = 9
+    RECOVERY_ATTEMPTS_PER_HOUR = 3
+    RECOVERY_HOURLY_COOLDOWN = 3600
     # Delay between reconnection attempts (seconds)
     RECONNECT_DELAY = 5
     
@@ -94,6 +101,13 @@ class TradingEngine:
         self.timeout_graceful_stop_triggered: bool = False
         self.force_stop_time: datetime = None  # Hard stop failsafe
         self.db_cleanup_task: asyncio.Task = None  # 5-min cleanup timer
+        self.recovery_store = RecoveryStore()
+        self.recovery_lock = asyncio.Lock()
+        self.recovery_state = "STOPPED"
+        self._session_clock_paused = False
+        self._last_clock_update = datetime.now()
+        self._last_checkpoint_write = datetime.now()
+        self._remaining_seconds: float = None
 
     def _init_mt5(self) -> bool:
         """
@@ -109,34 +123,68 @@ class TradingEngine:
         """
         logger.warning("[WARN] MT5 connection lost. Attempting reconnection...")
         
-        for attempt in range(1, self.MAX_RECONNECT_ATTEMPTS + 1):
-            logger.info(f"Reconnection attempt {attempt}/{self.MAX_RECONNECT_ATTEMPTS}...")
+        async with self.recovery_lock:
+            self.recovery_store.mark_disconnect()
+            self.recovery_state = "RECONNECTING"
+            for attempt in range(1, self.MAX_RECONNECT_ATTEMPTS + 1):
+                if not self.recovery_store.begin_reconnect_attempt():
+                    logger.critical(
+                        "MT5 recovery budget exhausted; persisted RECOVERY_FAILED "
+                        "with session time frozen"
+                    )
+                    self.recovery_state = RECOVERY_FAILED
+                    return False
+                logger.info(f"Reconnection attempt {attempt}/{self.MAX_RECONNECT_ATTEMPTS}...")
             
-            if self._init_mt5():
-                self.stats["reconnects"] += 1
-                logger.info(f"[OK] MT5 reconnected on attempt {attempt}")
-                # Reconciliation runs after a successful reconnect, BEFORE the
-                # tick loop resumes normal processing (agent/02 §10).
-                await self._reconcile_after_reconnect()
-                return True
+                if self._init_mt5():
+                    self.stats["reconnects"] += 1
+                    logger.info(f"[OK] MT5 reconnected on attempt {attempt}")
+                    self.recovery_store.mark_reconnected()
+                    self.recovery_state = "RECONCILING"
+                    summary = await self._reconcile_after_reconnect()
+                    if summary["blocked"]:
+                        self.recovery_state = "RECOVERY_BLOCKED"
+                        return False
+                    self.recovery_state = "RECOVERED"
+                    self.recovery_store.checkpoint.last_reconciliation = summary
+                    self.recovery_store.save()
+                    return True
             
-            await asyncio.sleep(self.RECONNECT_DELAY)
+                if attempt % self.RECOVERY_ATTEMPTS_PER_HOUR == 0:
+                    logger.warning(
+                        "MT5 recovery cooling down for one hour before the next "
+                        "three-attempt recovery window"
+                    )
+                    await asyncio.sleep(self.RECOVERY_HOURLY_COOLDOWN)
+                else:
+                    await asyncio.sleep(self.RECONNECT_DELAY)
         
-        logger.critical(f"Failed to reconnect after {self.MAX_RECONNECT_ATTEMPTS} attempts")
+        logger.critical("Failed to reconnect within the configured recovery budget")
         return False
 
     async def _reconcile_after_reconnect(self):
         """Replay closures that happened while disconnected, per symbol, so
         each strategy's queue and counts match the broker before live ticks
         resume."""
+        aggregate = {"resumed": 0, "reset_required": 0, "blocked": 0, "orphans": 0}
         for orch in list(self.bot_manager.bots.values()):
             for symbol, strategy in list(orch.strategies.items()):
                 try:
-                    if getattr(strategy, "running", False):
-                        summary = await strategy.reconcile_on_startup()
-                        logger.info(f"[RECONCILE] {symbol}: {summary}")
+                    if getattr(strategy, "running", False) or getattr(strategy, "recovered", False):
+                        result = await strategy.reconcile_on_startup()
+                        logger.info(f"[RECONCILE] {symbol}: {result}")
+                        if result.get("resumed"):
+                            aggregate["resumed"] += 1
+                        if result.get("reset_required"):
+                            aggregate["reset_required"] += 1
+                        if result.get("blocked"):
+                            aggregate["blocked"] += 1
+                        orphans = result.get("orphans", [])
+                        aggregate["orphans"] += len(orphans) if isinstance(orphans, list) else int(orphans or 0)
                 except Exception as e:
                     logger.error(f"[RECONCILE] {symbol}: reconciliation failed: {e}")
+                    aggregate["blocked"] += 1
+        return aggregate
 
     def _check_mt5_health(self) -> bool:
         """
@@ -191,9 +239,25 @@ class TradingEngine:
         Main tick processing loop with health monitoring.
         """
         # [FIX] Reset flags for new session
+        checkpoint = self.recovery_store.checkpoint
+        if checkpoint.lifecycle in ("RUNNING", "DISCONNECTED", "RECONNECTING", "RECONCILING"):
+            self._remaining_seconds = self.recovery_store.checkpoint.remaining_seconds
         self.start_time = datetime.now()
-        self.timeout_graceful_stop_triggered = False
+        if self._remaining_seconds is None:
+            max_runtime = 0.0
+            orchestrators = list(self.bot_manager.bots.values())
+            if orchestrators:
+                global_config = orchestrators[0].config_manager.get_global_config() or {}
+                max_runtime = max(0.0, float(global_config.get("max_runtime_minutes", 0)))
+            self._remaining_seconds = max_runtime * 60 if max_runtime else None
+            self.recovery_store.begin_session(
+                getattr(orchestrators[0], "user_id", "") if orchestrators else "",
+                self._remaining_seconds,
+            )
+        self.timeout_graceful_stop_triggered = checkpoint.timeout_graceful_stop_triggered
         self.force_stop_time = None
+        self.recovery_state = "RUNNING"
+        self._session_clock_paused = False
         
         logger.info(f"[TIMEOUT] Session started at {self.start_time}")
         
@@ -207,12 +271,17 @@ class TradingEngine:
                     self.tick_count += 1
                     if self.tick_count % self.HEALTH_CHECK_INTERVAL == 0:
                         if not self._check_mt5_health():
+                            self._pause_session_clock()
                             if not await self._reconnect_mt5():
-                                # Failed to reconnect - exit to trigger watchdog restart
-                                logger.critical("MT5 reconnection failed. Exiting for watchdog restart.")
-                                raise RuntimeError("MT5 connection lost and could not reconnect")
+                                logger.critical(
+                                    "MT5 recovery failed; engine is stopped pending manual restart"
+                                )
+                                self.running = False
+                                break
+                            self._resume_session_clock()
                     
                     # CHECK TIMEOUT: Trigger graceful stop if max_runtime_minutes elapsed
+                    self._update_session_clock()
                     if not self.timeout_graceful_stop_triggered:
                         await self._check_timeout_graceful_stop()
                     
@@ -282,7 +351,8 @@ class TradingEngine:
                     if self.consecutive_errors >= 5:
                         logger.warning("Too many consecutive errors. Attempting MT5 reconnect...")
                         if not await self._reconnect_mt5():
-                            raise RuntimeError("MT5 connection lost after consecutive errors")
+                            self.running = False
+                            break
                         self.consecutive_errors = 0
                     
                     await asyncio.sleep(1)  # Backoff on error
@@ -297,6 +367,7 @@ class TradingEngine:
             logger.info("Engine Loop Exited.")
             self.running = False
             self.start_time = None
+            self._persist_session_state()
 
     async def _sweep_all_symbol_pendings(self):
         """Remove any pending order carrying our magic before a hard shutdown.
@@ -338,6 +409,11 @@ class TradingEngine:
         """
         logger.info("Stopping trading engine...")
         self.running = False
+        self.recovery_state = "STOPPED"
+        self.recovery_store.mark_stopped(
+            graceful_stop=self.timeout_graceful_stop_triggered,
+            timeout=self.timeout_graceful_stop_triggered,
+        )
         mt5.shutdown()
         logger.info(" MT5 Disconnected. Engine stopped.")
         
@@ -349,8 +425,54 @@ class TradingEngine:
             **self.stats,
             "tick_count": self.tick_count,
             "consecutive_errors": self.consecutive_errors,
-            "running": self.running
+            "running": self.running,
+            "recovery_state": self.recovery_state,
+            "remaining_seconds": self._remaining_seconds,
+            "recovery_attempts": self.recovery_store.checkpoint.recovery_attempts,
+            "session_id": self.recovery_store.checkpoint.session_id,
         }
+
+    def _pause_session_clock(self) -> None:
+        if self._session_clock_paused:
+            return
+        now = datetime.now()
+        elapsed = (now - self._last_clock_update).total_seconds()
+        if self._remaining_seconds is not None:
+            self._remaining_seconds = max(0.0, self._remaining_seconds - elapsed)
+        self._session_clock_paused = True
+        self.recovery_store.heartbeat(
+            remaining_seconds=self._remaining_seconds, lifecycle="DISCONNECTED"
+        )
+
+    def _update_session_clock(self) -> None:
+        if self._session_clock_paused:
+            return
+        now = datetime.now()
+        elapsed = (now - self._last_clock_update).total_seconds()
+        self._last_clock_update = now
+        if self._remaining_seconds is not None:
+            self._remaining_seconds = max(0.0, self._remaining_seconds - elapsed)
+            if (now - self._last_checkpoint_write).total_seconds() >= 5:
+                self.recovery_store.heartbeat(
+                    remaining_seconds=self._remaining_seconds,
+                    lifecycle=self.recovery_state,
+                )
+                self._last_checkpoint_write = now
+
+    def _resume_session_clock(self) -> None:
+        self._last_clock_update = datetime.now()
+        self._session_clock_paused = False
+        self.recovery_store.heartbeat(
+            remaining_seconds=self._remaining_seconds, lifecycle="RUNNING"
+        )
+        self._last_checkpoint_write = datetime.now()
+
+    def _persist_session_state(self) -> None:
+        if self.recovery_store.checkpoint.session_id:
+            self.recovery_store.heartbeat(
+                remaining_seconds=self._remaining_seconds,
+                lifecycle=self.recovery_state,
+            )
     
     async def _schedule_db_cleanup(self):
         """
@@ -363,6 +485,37 @@ class TradingEngine:
         
         await asyncio.sleep(300)  # 5 minutes
         
+        checkpoint = self.recovery_store.checkpoint
+        if checkpoint.lifecycle not in ("STOPPED",):
+            logger.info(
+                "[CLEANUP] Skipping database cleanup because recovery state is "
+                f"{checkpoint.lifecycle}"
+            )
+            return
+        if not checkpoint.timeout_graceful_stop_triggered:
+            logger.info("[CLEANUP] Skipping cleanup without confirmed timeout completion")
+            return
+        try:
+            import MetaTrader5 as mt5_direct
+            from core.bulk_orders import MAGIC_NUMBER
+            open_positions = [
+                position for position in (mt5_direct.positions_get() or ())
+                if position.magic == MAGIC_NUMBER
+            ]
+            pending_orders = [
+                order for order in (mt5_direct.orders_get() or ())
+                if order.magic == MAGIC_NUMBER
+            ]
+        except Exception as exc:
+            logger.error(f"[CLEANUP] Could not verify terminal state: {exc}")
+            return
+        if open_positions or pending_orders:
+            logger.warning(
+                "[CLEANUP] Skipping cleanup while bot-owned terminal state remains: "
+                f"{len(open_positions)} positions, {len(pending_orders)} orders"
+            )
+            return
+
         if os.path.exists(db_path):
             try:
                 os.remove(db_path)
@@ -400,10 +553,13 @@ class TradingEngine:
         if not max_runtime or max_runtime <= 0:
             return
         
-        # Check if timeout has elapsed
-        elapsed = datetime.now() - self.start_time
-        elapsed_minutes = elapsed.total_seconds() / 60
-        
+        # The session clock is deliberately paused while disconnected.
+        if self._remaining_seconds is not None:
+            elapsed_minutes = max_runtime - (self._remaining_seconds / 60)
+        else:
+            elapsed = datetime.now() - self.start_time
+            elapsed_minutes = elapsed.total_seconds() / 60
+
         if elapsed_minutes >= max_runtime:
             logger.warning(f"[TIMEOUT] max_runtime_minutes ({max_runtime}) reached. Triggering graceful stop on all engines.")
             print(f"[TIMEOUT] max_runtime_minutes ({max_runtime}) reached after {elapsed_minutes:.1f} minutes. Triggering graceful stop...")

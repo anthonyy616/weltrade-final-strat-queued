@@ -55,7 +55,8 @@ class RunStateManager:
         except Exception as e:
             print(f" Error saving run state: {e}")
     
-    def set_running(self, user_id: str, active_symbols: List[str]):
+    def set_running(self, user_id: str, active_symbols: List[str],
+                    session_id: str = "", remaining_seconds: Optional[float] = None):
         """Mark user's bot as running with specific symbols"""
         now = datetime.now().isoformat()
         
@@ -65,6 +66,8 @@ class RunStateManager:
         self.state[user_id].update({
             "running": True,
             "active_symbols": active_symbols,
+            "session_id": session_id or self.state[user_id].get("session_id", ""),
+            "remaining_seconds": remaining_seconds,
             "last_updated": now
         })
         self.save_state()
@@ -77,6 +80,14 @@ class RunStateManager:
             self.state[user_id]["last_updated"] = datetime.now().isoformat()
             self.save_state()
             print(f" Saved stopped state: {user_id}")
+
+    def update_recovery(self, user_id: str, **values: Any) -> None:
+        """Persist recovery metadata without changing the running flag."""
+        if user_id not in self.state:
+            self.state[user_id] = {}
+        self.state[user_id].update(values)
+        self.state[user_id]["last_updated"] = datetime.now().isoformat()
+        self.save_state()
     
     def get_user_state(self, user_id: str) -> Optional[Dict[str, Any]]:
         """Get run state for a specific user"""

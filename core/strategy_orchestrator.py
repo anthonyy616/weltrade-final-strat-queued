@@ -90,6 +90,11 @@ class StrategyOrchestrator:
         tasks = [bot.start() for bot in self.strategies.values()]
         if tasks:
             await asyncio.gather(*tasks)
+        run_state_manager.set_running(
+            self.user_id,
+            sorted(self.active_symbols),
+            session_id="",
+        )
 
     async def stop(self):
         """Stop all strategies (graceful - completes open pairs)"""
@@ -97,6 +102,7 @@ class StrategyOrchestrator:
         tasks = [bot.stop() for bot in self.strategies.values()]
         if tasks:
             await asyncio.gather(*tasks)
+        run_state_manager.set_stopped(self.user_id)
 
     async def start_symbol(self, symbol: str):
         """Start a specific symbol strategy"""
