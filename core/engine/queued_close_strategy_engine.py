@@ -1459,6 +1459,9 @@ class QueuedCloseStrategyEngine:
 
         if self.repository is not None:
             await self.repository.mark_moving_position_closed(ticket)
+            # Persist the counter with the ticket mutation so a reconnect
+            # cannot resume a half-completed cycle at zero.
+            await self._save_symbol_state()
 
         # Release the paired constant target, keyed by direction+slot.
         # Direction comes from the closure's own slot semantics: for moving=BUY
@@ -1539,6 +1542,7 @@ class QueuedCloseStrategyEngine:
                         self.state.cycle_count, item.target.direction, item.target.slot_index)
                     await self.repository.mark_constant_target_fired(
                         self.state.cycle_count, item.target.direction, item.target.slot_index)
+                    await self._save_symbol_state()
 
                 constant_leg = ("ConstantBuy" if self.state.moving_side == "sell"
                                 else "ConstantSell")
@@ -1745,6 +1749,28 @@ class QueuedCloseStrategyEngine:
                     await self._rebuild_state_from_db(state_row)
                     await self._verify_constant_tickets(summary)
                     await self._replay_missed_closures(summary)
+                    # A cycle may have completed while disconnected without
+                    # any moving closure requiring replay. Evaluate the
+                    # restored counters explicitly so recovery cannot leave a
+                    # fully closed cycle stuck in ACTIVE.
+                    if (
+                        self.state.phase == "ACTIVE"
+                        and (
+                            self.state.moving_closed_count >= self.state.moving_total
+                            or self.state.constant_closed_count >= self.state.constant_total
+                        )
+                    ):
+                        summary["cycle_restarted"] = True
+                        await self._end_cycle(
+                            "EARLY_FORCE_CLOSE"
+                            if (
+                                self.state.moving_closed_count != self.state.moving_total
+                                or self.state.constant_closed_count != self.state.constant_total
+                            )
+                            else "NORMAL",
+                            self._last_ask,
+                            self._last_bid,
+                        )
                 else:
                     # No active cycle persisted — clean slate
                     self.state.phase = "IDLE"
@@ -1826,6 +1852,16 @@ class QueuedCloseStrategyEngine:
                 closed=False, lot=self.state.moving_lot)
 
         self.state.constant_tickets = await self.repository.get_constant_tickets()
+        # Older builds did not persist counters after every close. Infer a
+        # safe lower bound from the pool totals and currently open tickets.
+        self.state.moving_closed_count = max(
+            self.state.moving_closed_count,
+            self.state.moving_total - len(self.state.moving_positions),
+        )
+        self.state.constant_closed_count = max(
+            self.state.constant_closed_count,
+            self.state.constant_total - len(self.state.constant_tickets),
+        )
 
         # Rebuild pending queue from DB
         self.state.close_queue = []
