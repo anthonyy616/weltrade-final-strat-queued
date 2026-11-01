@@ -27,3 +27,5 @@ personal/*
 # Ignore all files in the personal folder except for the README.md file
 
 sync_log.txt
+
+agent/

@@ -1,11 +1,124 @@
-/* Clean, Minimalist UI Theme */
+/* ==========================================================================
+   Weltrade MT5 Bot — design system
+   Tokens first (light on :root, dark under .dark), then base styles, then
+   smallest shared components. Tailwind (CDN) still handles layout utilities;
+   the look lives here.
+   ========================================================================== */
 
-body {
-  transition: background-color 0.3s, color 0.3s;
-  -webkit-font-smoothing: antialiased;
+:root {
+  --bg: #F5F5F7;
+  --surface: #FFFFFF;
+  --surface-2: #F5F5F7;
+  --surface-3: #EDEDF0;
+  --text: #1D1D1F;
+  --text-2: #6E6E73;
+  --text-3: #8E8E93;
+  --line: rgba(0, 0, 0, 0.08);
+  --line-strong: rgba(0, 0, 0, 0.16);
+  --accent: #0071E3;
+  --accent-hover: #0077ED;
+  --accent-soft: rgba(0, 113, 227, 0.10);
+  --success: #248A3D;
+  --success-soft: rgba(36, 138, 61, 0.10);
+  --danger: #D70015;
+  --danger-soft: rgba(215, 0, 21, 0.08);
+  --warning: #B25000;
+  --warning-soft: rgba(178, 80, 0, 0.10);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.04);
+  --shadow-pop: 0 20px 60px rgba(0, 0, 0, 0.18);
+
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  --radius-field: 8px;
+  --radius-chip: 12px;
+  --radius-card: 16px;
+  --radius-modal: 20px;
 }
 
-/* Custom Scrollbar */
+.dark {
+  --bg: #000000;
+  --surface: #1C1C1E;
+  --surface-2: #2C2C2E;
+  --surface-3: #3A3A3C;
+  --text: #F5F5F7;
+  --text-2: #98989D;
+  --text-3: #636366;
+  --line: rgba(255, 255, 255, 0.10);
+  --line-strong: rgba(255, 255, 255, 0.18);
+  --accent: #0A84FF;
+  --accent-hover: #409CFF;
+  --accent-soft: rgba(10, 132, 255, 0.18);
+  --success: #30D158;
+  --success-soft: rgba(48, 209, 88, 0.16);
+  --danger: #FF453A;
+  --danger-soft: rgba(255, 69, 58, 0.16);
+  --warning: #FF9F0A;
+  --warning-soft: rgba(255, 159, 10, 0.16);
+  --shadow-card: none;
+  --shadow-pop: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+
+/* --------------------------------------------------------------------------
+   Base
+   -------------------------------------------------------------------------- */
+
+html {
+  scroll-padding-top: 72px;
+}
+
+body {
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-variant-numeric: tabular-nums;
+}
+
+.numeric,
+#price-display,
+#pos-count,
+#pending-count,
+#moving-constant-readout,
+#session-elapsed,
+#session-total,
+#session-remaining {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* Keyboard focus ring: visible everywhere, never on mouse clicks. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* --------------------------------------------------------------------------
+   Scrollbars — thin and quiet
+   -------------------------------------------------------------------------- */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--surface-3) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-color: var(--surface-3);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text-3);
+}
+
 .custom-scrollbar::-webkit-scrollbar {
   width: 5px;
   height: 5px;
@@ -14,14 +127,29 @@ body {
   background: transparent;
 }
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background-color: #cbd5e1;
+  background-color: var(--surface-3);
   border-radius: 4px;
 }
-.dark .custom-scrollbar::-webkit-scrollbar-thumb {
-  background-color: #475569;
+
+/* --------------------------------------------------------------------------
+   Motion
+   -------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
-/* Loading Spinner */
+/* --------------------------------------------------------------------------
+   Loading Spinner
+   -------------------------------------------------------------------------- */
+
 .loader {
   border: 2px solid rgba(255, 255, 255, 0.2);
   border-top-color: currentColor;
@@ -35,32 +163,209 @@ body {
   to { transform: rotate(360deg); }
 }
 
-/* Session Logs popup */
+/* --------------------------------------------------------------------------
+   Session Logs popup
+   Opens in a bare window that loads only this file, so every variable it
+   needs must be defined above.
+   -------------------------------------------------------------------------- */
+
 .session-log {
-  background-color: #f8fafc;
-  color: #0f172a;
-  padding: 1.5rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  font-size: 0.875rem;
+  background-color: var(--bg);
+  color: var(--text);
+  padding: 24px;
+  font-family: var(--font-mono);
+  font-size: 12px;
   white-space: pre-wrap;
   line-height: 1.5;
 }
 .dark .session-log {
-  background-color: #020617;
-  color: #cbd5e1;
+  background-color: var(--bg);
+  color: var(--text);
 }
 
-/* Inputs removing number arrows for a cleaner square look */
-input[type=number]::-webkit-inner-spin-button, 
-input[type=number]::-webkit-outer-spin-button { 
-  -webkit-appearance: none; 
-  margin: 0; 
+/* Inputs removing number arrows for a cleaner look */
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 input[type=number] {
   -moz-appearance: textfield;
+  appearance: textfield;
 }
 
-/* ===== Mobile optimizations ===== */
+/* ==========================================================================
+   Components
+   ========================================================================== */
+
+/* --- Buttons: 36px desktop, 44px on touch, 8px radius, 14px/500 --------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 16px;
+  border-radius: var(--radius-field);
+  border: 1px solid transparent;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: #FFFFFF;
+}
+.btn-primary:hover {
+  background: var(--accent-hover);
+}
+
+.btn-success {
+  background: var(--success);
+  color: #FFFFFF;
+}
+.btn-success:hover {
+  background: color-mix(in srgb, var(--success) 88%, #000);
+}
+
+.btn-secondary {
+  background: var(--surface-2);
+  color: var(--text);
+  border-color: var(--line);
+}
+.btn-secondary:hover {
+  background: var(--surface-3);
+}
+
+.btn-danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.btn-danger:hover {
+  background: color-mix(in srgb, var(--danger-soft) 78%, var(--danger));
+}
+
+.btn-danger-solid {
+  background: var(--danger);
+  color: #FFFFFF;
+}
+.btn-danger-solid:hover {
+  background: color-mix(in srgb, var(--danger) 88%, #000);
+}
+
+.btn-warning {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+.btn-warning:disabled {
+  opacity: 0.75;
+}
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-field);
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.icon-btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+/* --- Status badge pill --------------------------------------------------- */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+.badge-success {
+  background: var(--success-soft);
+  color: var(--success);
+}
+.badge-warning {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+.badge-offline {
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+
+/* --- Page title ----------------------------------------------------------- */
+
+.page-title {
+  font-size: 28px;
+  line-height: 1.15;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+/* --- Stat tiles ------------------------------------------------------------ */
+
+.tile {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+
+.stat-label {
+  font-size: 12px;
+  line-height: 1.3;
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+.stat-value {
+  font-size: 22px;
+  line-height: 1.1;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+.stat-value-sm {
+  font-size: 20px;
+  line-height: 1.1;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+.caption {
+  font-size: 12px;
+  line-height: 1.4;
+  font-weight: 400;
+  color: var(--text-3);
+}
+
+/* ==========================================================================
+   Mobile optimizations
+   ========================================================================== */
 
 /* Prevent iOS auto-zoom: any focusable element must be >= 16px on touch
    devices. Desktop sizes are restored by the media query below. */
@@ -69,6 +374,18 @@ input[type=number] {
   select,
   textarea {
     font-size: 16px !important;
+  }
+
+  /* 44px targets on touch screens */
+  .btn,
+  .icon-btn {
+    height: 44px;
+  }
+  .icon-btn {
+    width: 44px;
+  }
+  .page-title {
+    font-size: 22px;
   }
 
   /* Keep controls easy to tap without adding space above ordinary fields. */
@@ -105,8 +422,6 @@ input[type=number] {
     overflow-y: auto;
   }
 
-  /* Sticky mobile nav needs a solid backdrop so page content scrolling
-     underneath stays readable */
   #main-content {
     overflow-x: hidden;
   }
@@ -118,14 +433,12 @@ input[type=number] {
   label {
     min-height: 0;
   }
+  .stat-value {
+    font-size: 28px;
+  }
 }
 
 /* Dashboard tiles: keep the numeric readouts from wrapping awkwardly */
 #view-dashboard .grid > div {
   min-width: 0;
-}
-
-/* Sticky mobile tab bar offsets for in-page anchors */
-html {
-  scroll-padding-top: 72px;
 }

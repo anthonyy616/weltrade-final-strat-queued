@@ -16,6 +16,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Weltrade MT5 Bot</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap"
+        rel="stylesheet">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script>
@@ -27,6 +32,10 @@
                         dark: '#0f172a',
                         darker: '#020617',
                         card: '#1e293b',
+                    },
+                    fontFamily: {
+                        sans: ['-apple-system', 'BlinkMacSystemFont', '"SF Pro Text"', 'Inter', '"Segoe UI"', 'system-ui', 'sans-serif'],
+                        mono: ['ui-monospace', '"SF Mono"', '"JetBrains Mono"', 'Menlo', 'Consolas', 'monospace'],
                     }
                 }
             }
@@ -36,8 +45,7 @@
     <link rel="stylesheet" href="static/styles.css">
 </head>
 
-<body
-    class="p-4 md:p-8 font-sans bg-gray-50 text-slate-900 dark:bg-slate-950 dark:text-slate-50 transition-colors duration-300">
+<body class="p-4 md:p-6 bg-[var(--bg)] text-[var(--text)] font-sans antialiased transition-colors duration-300">
 
     <div id="login-modal" class="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center">
         <div
@@ -131,84 +139,78 @@
     </div>
 
     <!-- Main App Content (hidden until logged in) -->
-    <div id="main-content" class="max-w-7xl mx-auto hidden">
+    <div id="main-content" class="max-w-6xl mx-auto hidden">
         <!-- Header -->
-        <div class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2 mb-4 md:mb-6">
-            <h1 class="text-lg sm:text-xl md:text-2xl font-bold flex items-center gap-2 flex-wrap">
-                <span class="text-blue-500"></span> Weltrade Bot <span id="status-badge"
-                    class="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-slate-200 text-slate-500 dark:bg-slate-800 dark:text-slate-400"><span
-                        class="h-2 w-2 rounded-full bg-slate-400"></span> Offline</span>
+        <header class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-6">
+            <h1 class="page-title flex items-center gap-3 flex-wrap">
+                <span></span> Weltrade Bot <span id="status-badge"
+                    class="badge badge-offline"><span
+                        class="h-2 w-2 rounded-full bg-[var(--text-3)]"></span> Offline</span>
             </h1>
             <div class="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
                 <button id="toggle-btn"
-                    class="px-3 sm:px-4 py-1 sm:py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs sm:text-sm font-medium rounded shadow-sm"
+                    class="btn btn-success"
                     onclick="toggleBot()">Start Bot</button>
                 <button onclick="toggleTheme()"
-                    class="p-1.5 sm:p-2 rounded bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-300 dark:hover:bg-slate-700 transition"
+                    class="icon-btn"
                     title="Toggle Theme">
-                    <svg id="theme-icon-dark" class="w-4 h-4 hidden" fill="currentColor" viewBox="0 0 20 20">
+                    <svg id="theme-icon-dark" class="w-5 h-5 hidden" fill="currentColor" viewBox="0 0 20 20">
                         <path d="M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z"></path>
                     </svg>
-                    <svg id="theme-icon-light" class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                    <svg id="theme-icon-light" class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
                         <path fill-rule="evenodd"
                             d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4.22 2.32a1 1 0 011.415 0l.707.707a1 1 0 01-1.414 1.415l-.707-.707a1 1 0 010-1.415zM18 10a1 1 0 01-1 1h-1a1 1 0 110-2h1a1 1 0 011 1zm-2.32 4.22a1 1 0 010 1.415l-.707.707a1 1 0 11-1.415-1.414l.707-.707a1 1 0 011.415 0zM10 16a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zm-4.22-2.32a1 1 0 01-1.415 0l-.707-.707a1 1 0 11-1.415-1.414l.707.707a1 1 0 010-1.415zM2 10a1 1 0 011-1h1a1 1 0 110 2H3a1 1 0 01-1-1zm2.32-4.22a1 1 0 010-1.415l.707-.707a1 1 0 011.415 1.414l-.707.707a1 1 0 01-1.415 0zM10 5a5 5 0 100 10 5 5 0 000-10z"
                             clip-rule="evenodd"></path>
                     </svg>
                 </button>
                 <button onclick="logout()"
-                    class="px-2 sm:px-3 py-1 sm:py-1.5 bg-red-500/10 text-red-600 dark:text-red-500 text-xs font-medium rounded border border-red-500/20">Sign
-                    Out</button>
+                    class="btn btn-secondary">Sign Out</button>
             </div>
-        </div>
+        </header>
 
         <!-- Mobile Navigation -->
         <div
-            class="flex md:hidden sticky top-0 z-40 bg-slate-200 dark:bg-slate-800 rounded-lg p-1 border border-slate-300 dark:border-slate-700 w-full mb-4 shadow-md">
+            class="flex md:hidden sticky top-0 z-40 rounded-xl p-1 bg-[var(--surface-3)] shadow-sm w-full mb-6">
             <button onclick="switchTab('dashboard')" id="tab-dashboard"
-                class="flex-1 py-1.5 text-xs font-medium rounded-md bg-white text-blue-700 dark:bg-slate-700 dark:text-blue-300 shadow-sm transition">Dashboard</button>
+                class="flex-1 py-1.5 text-xs font-medium rounded-lg bg-[var(--surface)] text-[var(--text)] shadow-sm transition">Dashboard</button>
             <button onclick="switchTab('config')" id="tab-config"
-                class="flex-1 py-1.5 text-xs font-medium rounded-md text-slate-600 dark:text-slate-400 transition hover:text-slate-800 dark:hover:text-slate-200">Config</button>
+                class="flex-1 py-1.5 text-xs font-medium rounded-lg text-[var(--text-2)] transition hover:text-[var(--text)]">Config</button>
             <button onclick="switchTab('logs')" id="tab-logs"
-                class="flex-1 py-1.5 text-xs font-medium rounded-md text-slate-600 dark:text-slate-400 transition hover:text-slate-800 dark:hover:text-slate-200">Logs</button>
+                class="flex-1 py-1.5 text-xs font-medium rounded-lg text-[var(--text-2)] transition hover:text-[var(--text)]">Logs</button>
         </div>
 
         <div id="view-dashboard" class="block md:block">
-            <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 sm:gap-3 md:gap-4">
-                <div
-                    class="bg-white dark:bg-slate-800 p-2 sm:p-3 md:p-4 rounded-lg border border-slate-200 dark:border-slate-700">
-                    <div class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase">Live Price</div>
-                    <div id="price-display" class="text-lg sm:text-xl md:text-2xl font-bold mt-1 tracking-tight">---
+            <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 md:gap-4">
+                <div class="tile p-3 md:p-4">
+                    <div class="stat-label">Live price</div>
+                    <div id="price-display" class="stat-value mt-2 tracking-tight">---
                     </div>
                 </div>
-                <div
-                    class="bg-white dark:bg-slate-800 p-2 sm:p-3 md:p-4 rounded-lg border border-slate-200 dark:border-slate-700">
-                    <div class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase">Open Positions</div>
-                    <div class="text-lg sm:text-xl md:text-2xl font-bold mt-1"><span id="pos-count">0</span></div>
+                <div class="tile p-3 md:p-4">
+                    <div class="stat-label">Open positions</div>
+                    <div class="stat-value mt-2"><span id="pos-count">0</span></div>
                 </div>
-                <div
-                    class="bg-white dark:bg-slate-800 p-2 sm:p-3 md:p-4 rounded-lg border border-slate-200 dark:border-slate-700 col-span-2 sm:col-span-1">
-                    <div class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase">Moving · Constant</div>
-                    <div class="text-lg sm:text-xl md:text-2xl font-bold mt-1"><span id="moving-constant-readout">0/0 ·
+                <div class="tile p-3 md:p-4 col-span-2 sm:col-span-1">
+                    <div class="stat-label">Moving · Constant</div>
+                    <div class="stat-value mt-2"><span id="moving-constant-readout">0/0 ·
                             0/0</span></div>
                 </div>
-                <div
-                    class="bg-white dark:bg-slate-800 p-2 sm:p-3 md:p-4 rounded-lg border border-slate-200 dark:border-slate-700 col-span-2 sm:col-span-1">
-                    <div class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase">SESSION</div>
-                    <div class="text-sm sm:text-base md:text-lg font-semibold mt-1"><span
-                            id="session-elapsed">00:00</span>/<span id="session-total">00:00</span></div>
-                    <div class="text-xs text-slate-400 mt-1">Remain: <span id="session-remaining">--:--</span></div>
+                <div class="tile p-3 md:p-4 col-span-2 sm:col-span-1">
+                    <div class="stat-label">Session</div>
+                    <div class="stat-value-sm mt-2"><span
+                            id="session-elapsed">00:00</span><span class="text-[var(--text-3)] font-normal">/</span><span
+                            id="session-total">00:00</span></div>
+                    <div class="caption mt-1">Remain: <span id="session-remaining">--:--</span></div>
                 </div>
-                <div
-                    class="bg-white dark:bg-slate-800 p-2 sm:p-3 md:p-4 rounded-lg border border-slate-200 dark:border-slate-700">
-                    <div class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase">Close Queue</div>
-                    <div class="text-lg sm:text-xl md:text-2xl font-bold mt-1"><span id="pending-count">0</span></div>
+                <div class="tile p-3 md:p-4">
+                    <div class="stat-label">Close queue</div>
+                    <div class="stat-value mt-2"><span id="pending-count">0</span></div>
                 </div>
-                <div
-                    class="bg-white dark:bg-slate-800 p-2 sm:p-3 md:p-4 rounded-lg border border-slate-200 dark:border-slate-700">
-                    <div class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase">Bot State</div>
-                    <div id="cycle-state" class="text-sm sm:text-base md:text-lg font-bold mt-1 text-blue-400">Idle
+                <div class="tile p-3 md:p-4">
+                    <div class="stat-label">Bot state</div>
+                    <div id="cycle-state" class="stat-value-sm mt-2 text-[var(--text-2)]">Idle
                     </div>
-                    <div class="mt-2 text-[10px] leading-relaxed text-amber-700 dark:text-amber-300">
+                    <div class="caption mt-2">
                         The bot normally keeps cycling until the session ends. It may stop sooner if you stop it,
                         repeated attempts fail, or the app or trading connection needs attention.
                     </div>
@@ -926,6 +928,13 @@
             else if (status.armed) stateLabel.textContent = "Armed - waiting for trigger";
             else if (status.running) stateLabel.textContent = `Active (Iteration ${status.iteration})`;
             else stateLabel.textContent = "Idle";
+            // Bot state value colour: accent when working, warning when
+            // resetting, quiet secondary when idle. Class-only change.
+            stateLabel.className = status.is_resetting
+                ? "stat-value-sm mt-2 text-[var(--warning)]"
+                : status.running
+                    ? "stat-value-sm mt-2 text-[var(--accent)]"
+                    : "stat-value-sm mt-2 text-[var(--text-2)]";
 
             // Update Buttons
             const statusBadge = document.getElementById('status-badge');
@@ -933,10 +942,10 @@
 
             if (status.graceful_stop) {
                 // GRACEFUL STOP IN PROGRESS - show yellow "Stopping..." state
-                statusBadge.innerHTML = '<div class="h-2 w-2 rounded-full bg-yellow-400 animate-pulse"></div> Stopping...';
-                statusBadge.className = "flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-yellow-500/10 text-yellow-500 border border-yellow-500/20";
+                statusBadge.innerHTML = '<div class="h-2 w-2 rounded-full bg-[var(--warning)] animate-pulse"></div> Stopping...';
+                statusBadge.className = "badge badge-warning";
                 toggleBtn.textContent = "Stopping...";
-                toggleBtn.className = "px-4 py-1.5 bg-yellow-600 text-white text-sm font-medium rounded cursor-not-allowed opacity-75";
+                toggleBtn.className = "btn btn-warning cursor-not-allowed opacity-75";
                 toggleBtn.disabled = true;
                 if (lastRunningState !== 'stopping') log("Graceful stop in progress - completing open positions...");
                 lastRunningState = 'stopping';
@@ -945,13 +954,13 @@
                 // ladder is parked waiting for price rather than managed.
                 const armed = status.armed;
                 statusBadge.innerHTML = armed
-                    ? '<div class="h-2 w-2 rounded-full bg-amber-400 animate-pulse"></div> Armed'
-                    : '<div class="h-2 w-2 rounded-full bg-green-400 animate-pulse"></div> Active';
+                    ? '<div class="h-2 w-2 rounded-full bg-[var(--warning)] animate-pulse"></div> Armed'
+                    : '<div class="h-2 w-2 rounded-full bg-[var(--success)] animate-pulse"></div> Active';
                 statusBadge.className = armed
-                    ? "flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-500 border border-amber-500/20"
-                    : "flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-green-500/10 text-green-500 border border-green-500/20";
+                    ? "badge badge-warning"
+                    : "badge badge-success";
                 toggleBtn.textContent = "Stop Bot";
-                toggleBtn.className = "px-4 py-1.5 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded";
+                toggleBtn.className = "btn btn-danger-solid";
                 toggleBtn.disabled = false;
                 if (lastRunningState !== true) log(`Bot Running. Step ${status.step}`);
                 lastRunningState = true;
@@ -963,10 +972,10 @@
                     lastArmedState = false;
                 }
             } else {
-                statusBadge.innerHTML = '<div class="h-2 w-2 rounded-full bg-slate-400"></div> Offline';
-                statusBadge.className = "flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-slate-200 text-slate-500 dark:bg-slate-800 dark:text-slate-400";
+                statusBadge.innerHTML = '<div class="h-2 w-2 rounded-full bg-[var(--text-3)]"></div> Offline';
+                statusBadge.className = "badge badge-offline";
                 toggleBtn.textContent = "Start Bot";
-                toggleBtn.className = "px-4 py-1.5 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded";
+                toggleBtn.className = "btn btn-success";
                 toggleBtn.disabled = false;
                 if (lastRunningState && lastRunningState !== false) log("Bot Stopped.");
                 lastRunningState = false;
@@ -1440,8 +1449,8 @@
                 const btn = document.getElementById(`tab-${id}`);
                 if (btn) {
                     btn.className = id === tabId
-                        ? "flex-1 py-1.5 text-xs font-medium rounded-md bg-white text-blue-700 dark:bg-slate-700 dark:text-blue-300 shadow-sm transition"
-                        : "flex-1 py-1.5 text-xs font-medium rounded-md text-slate-600 dark:text-slate-400 transition hover:text-slate-800 dark:hover:text-slate-200";
+                        ? "flex-1 py-1.5 text-xs font-medium rounded-lg bg-[var(--surface)] text-[var(--text)] shadow-sm transition"
+                        : "flex-1 py-1.5 text-xs font-medium rounded-lg text-[var(--text-2)] transition hover:text-[var(--text)]";
                 }
                 const view = document.getElementById(`view-${id}`);
                 if (view) {

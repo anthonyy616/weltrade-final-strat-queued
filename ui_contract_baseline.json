@@ -1,0 +1,340 @@
+{
+  "ids": {
+    "armed_timeout_seconds": [
+      "input"
+    ],
+    "asset-settings-container": [
+      "div"
+    ],
+    "autosave-knob": [
+      "span"
+    ],
+    "autosave-status": [
+      "div"
+    ],
+    "autosave-toggle": [
+      "button"
+    ],
+    "cancel_ack_deadline_ms": [
+      "input"
+    ],
+    "copy-diff-msg": [
+      "p"
+    ],
+    "copy-diff-prompt": [
+      "div"
+    ],
+    "copy-lot-btn": [
+      "button"
+    ],
+    "copy-lots-modal": [
+      "div"
+    ],
+    "copy-source-list": [
+      "div"
+    ],
+    "copy-step-1": [
+      "div"
+    ],
+    "copy-step-2": [
+      "div"
+    ],
+    "copy-success": [
+      "div"
+    ],
+    "copy-target-list": [
+      "div"
+    ],
+    "cycle-state": [
+      "div"
+    ],
+    "email": [
+      "input"
+    ],
+    "form-login": [
+      "form"
+    ],
+    "history-list": [
+      "div"
+    ],
+    "login-btn": [
+      "button"
+    ],
+    "login-error": [
+      "p"
+    ],
+    "login-modal": [
+      "div"
+    ],
+    "logs": [
+      "div"
+    ],
+    "main-content": [
+      "div"
+    ],
+    "max_consecutive_open_failures": [
+      "input"
+    ],
+    "max_runtime_minutes": [
+      "input"
+    ],
+    "moving-constant-readout": [
+      "span"
+    ],
+    "password": [
+      "input"
+    ],
+    "pending-count": [
+      "span"
+    ],
+    "pos-count": [
+      "span"
+    ],
+    "price-display": [
+      "div"
+    ],
+    "session-elapsed": [
+      "span"
+    ],
+    "session-remaining": [
+      "span"
+    ],
+    "session-total": [
+      "span"
+    ],
+    "status-badge": [
+      "span"
+    ],
+    "sym_${safe}_buy_count": [
+      "input"
+    ],
+    "sym_${safe}_buy_lot": [
+      "input"
+    ],
+    "sym_${safe}_constant_freq": [
+      "input"
+    ],
+    "sym_${safe}_constant_side": [
+      "select"
+    ],
+    "sym_${safe}_enabled": [
+      "input"
+    ],
+    "sym_${safe}_entry_offset": [
+      "input"
+    ],
+    "sym_${safe}_grid_distance": [
+      "input"
+    ],
+    "sym_${safe}_moving_freq": [
+      "input"
+    ],
+    "sym_${safe}_sell_count": [
+      "input"
+    ],
+    "sym_${safe}_sell_lot": [
+      "input"
+    ],
+    "sym_${safe}_volume_warning": [
+      "div"
+    ],
+    "tab-config": [
+      "button"
+    ],
+    "tab-dashboard": [
+      "button"
+    ],
+    "tab-logs": [
+      "button"
+    ],
+    "theme-icon-dark": [
+      "svg"
+    ],
+    "theme-icon-light": [
+      "svg"
+    ],
+    "toggle-btn": [
+      "button"
+    ],
+    "view-config": [
+      "div"
+    ],
+    "view-dashboard": [
+      "div"
+    ],
+    "view-logs": [
+      "div"
+    ],
+    "volume-warning-popup": [
+      "div"
+    ],
+    "win_fill_deadline_ms": [
+      "input"
+    ]
+  },
+  "handlers": [
+    "armed_timeout_seconds :: oninput=scheduleAutoSave()",
+    "autosave-toggle :: onclick=toggleAutoSave()",
+    "button :: onclick=_hideVolumeWarning()",
+    "button :: onclick=cancelCopyChoice()",
+    "button :: onclick=closeCopyLotsModal()",
+    "button :: onclick=confirmCopyChoice()",
+    "button :: onclick=downloadSession('${s.id}', '${s.name}')",
+    "button :: onclick=executeLotCopy()",
+    "button :: onclick=goBackToCopyStep1()",
+    "button :: onclick=goToCopyStep2()",
+    "button :: onclick=loadHistory()",
+    "button :: onclick=logout()",
+    "button :: onclick=startAllSymbols()",
+    "button :: onclick=startSymbol('${symbol}')",
+    "button :: onclick=stopAllSymbols()",
+    "button :: onclick=stopSymbol('${symbol}')",
+    "button :: onclick=terminateAllSymbols()",
+    "button :: onclick=terminateSymbol('${symbol}')",
+    "button :: onclick=toggleTheme()",
+    "button :: onclick=viewSession('${s.id}')",
+    "cancel_ack_deadline_ms :: oninput=scheduleAutoSave()",
+    "copy-lot-btn :: onclick=openCopyLotsModal()",
+    "form :: onsubmit=updateConfig(event)",
+    "form-login :: onsubmit=handleSupabaseLogin(event)",
+    "max_consecutive_open_failures :: oninput=scheduleAutoSave()",
+    "max_runtime_minutes :: oninput=scheduleAutoSave()",
+    "sym_${safe}_buy_count :: oninput=setLastInteracted('${symbol}', '${safe}'); scheduleAutoSave()",
+    "sym_${safe}_buy_lot :: oninput=setLastInteracted('${symbol}', '${safe}'); scheduleAutoSave()",
+    "sym_${safe}_constant_freq :: oninput=scheduleAutoSave()",
+    "sym_${safe}_constant_side :: onchange=scheduleAutoSave()",
+    "sym_${safe}_enabled :: onchange=onSymbolToggle('${symbol}', this)",
+    "sym_${safe}_entry_offset :: oninput=scheduleAutoSave()",
+    "sym_${safe}_grid_distance :: oninput=scheduleAutoSave()",
+    "sym_${safe}_moving_freq :: oninput=scheduleAutoSave()",
+    "sym_${safe}_sell_count :: oninput=setLastInteracted('${symbol}', '${safe}'); scheduleAutoSave()",
+    "sym_${safe}_sell_lot :: oninput=setLastInteracted('${symbol}', '${safe}'); scheduleAutoSave()",
+    "tab-config :: onclick=switchTab('config')",
+    "tab-dashboard :: onclick=switchTab('dashboard')",
+    "tab-logs :: onclick=switchTab('logs')",
+    "toggle-btn :: onclick=toggleBot()",
+    "win_fill_deadline_ms :: oninput=scheduleAutoSave()"
+  ],
+  "names": [
+    "copy-diff-choice",
+    "copy-source",
+    "copy-target",
+    "viewport"
+  ],
+  "functions": [
+    "_clearFieldWarningsForSafeId",
+    "_hideVolumeWarning",
+    "_markFieldExceeded",
+    "_showVolumeWarning",
+    "apiCall",
+    "applyGlobalSettings",
+    "buildConfigPayload",
+    "cancelCopyChoice",
+    "closeCopyLotsModal",
+    "confirmCopyChoice",
+    "copyConfigFrom",
+    "downloadSession",
+    "executeLotCopy",
+    "fetchStatus",
+    "fetchText",
+    "formatTime",
+    "formatVolume",
+    "getCopyCandidateSymbols",
+    "getDefaultCopySourceSymbol",
+    "getPreferredCopySelectionSymbols",
+    "getSelectedAssetSymbols",
+    "getSymbolSetCount",
+    "getVolumeInputs",
+    "goBackToCopyStep1",
+    "goToCopyStep2",
+    "handleSupabaseLogin",
+    "initAutoSave",
+    "initSupabase",
+    "loadConfig",
+    "loadHistory",
+    "log",
+    "logout",
+    "onSymbolToggle",
+    "openCopyLotsModal",
+    "populateCopySourceList",
+    "populateCopyTargetList",
+    "renderAssetSettings",
+    "safeIdFromSymbol",
+    "saveConfigPayload",
+    "scheduleAutoSave",
+    "setLastInteracted",
+    "setLoggedInState",
+    "setLoggedOutState",
+    "simulateVolumeAccumulation",
+    "startAllSymbols",
+    "startPolling",
+    "startSymbol",
+    "stopAllSymbols",
+    "stopSymbol",
+    "switchTab",
+    "terminateAllSymbols",
+    "terminateSymbol",
+    "toggleAutoSave",
+    "toggleBot",
+    "toggleTheme",
+    "updateAutoSaveToggleUI",
+    "updateConfig",
+    "updateSessionDisplay",
+    "updateThemeIcon",
+    "validateSymbolVolume",
+    "viewSession"
+  ],
+  "endpoints": [
+    "/config",
+    "/control/${action}",
+    "/control/start",
+    "/control/start/${encodeURIComponent(symbol)}",
+    "/control/stop",
+    "/control/stop/${encodeURIComponent(symbol)}",
+    "/control/terminate-all",
+    "/control/terminate/${encodeURIComponent(symbol)}",
+    "/history",
+    "/limits",
+    "/status"
+  ],
+  "lookups": [
+    "asset-settings-container",
+    "autosave-knob",
+    "autosave-status",
+    "autosave-toggle",
+    "copy-diff-prompt",
+    "copy-lots-modal",
+    "copy-source-list",
+    "copy-step-1",
+    "copy-step-2",
+    "copy-success",
+    "copy-target-list",
+    "cycle-state",
+    "email",
+    "history-list",
+    "login-btn",
+    "login-error",
+    "login-modal",
+    "logs",
+    "main-content",
+    "moving-constant-readout",
+    "password",
+    "pending-count",
+    "pos-count",
+    "price-display",
+    "session-elapsed",
+    "session-remaining",
+    "session-total",
+    "status-badge",
+    "sym_${safeId}_${suffix}",
+    "sym_${safeId}_volume_warning",
+    "sym_${safe}_constant_side",
+    "sym_${safe}_enabled",
+    "tab-${id}",
+    "theme-icon-dark",
+    "theme-icon-light",
+    "toggle-btn",
+    "view-${id}",
+    "volume-warning-popup"
+  ]
+}
