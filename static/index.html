@@ -76,63 +76,63 @@
 
     <!-- Copy Lots Modal (hidden by default) -->
     <div id="copy-lots-modal"
-        class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
-        <div class="bg-slate-800 rounded-lg border border-slate-700 w-full max-w-sm shadow-2xl">
-            <div class="p-4 border-b border-slate-700 flex justify-between items-center">
-                <h3 class="text-sm font-bold text-white">Copy Lot Setup</h3>
+        class="fixed inset-0 bg-black/40 backdrop-blur-md z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-[var(--surface)] dark:bg-[var(--surface)] rounded-[20px] border border-[var(--line)] w-full max-w-sm shadow-2xl text-[var(--text)]">
+            <div class="p-5 border-b border-[var(--line)] flex justify-between items-center">
+                <h3 class="section-title">Copy Lot Setup</h3>
                 <button type="button" onclick="closeCopyLotsModal()"
-                    class="text-slate-400 hover:text-white text-lg leading-none">&times;</button>
+                    class="icon-btn text-xl leading-none text-[var(--text-2)] hover:text-[var(--text)]">&times;</button>
             </div>
 
             <!-- Step 1: Source -->
-            <div id="copy-step-1" class="p-4 space-y-3">
-                <p class="text-xs text-slate-400">Step 1 — Select the asset to copy <strong>from</strong>:</p>
-                <div id="copy-source-list" class="space-y-1 max-h-48 overflow-y-auto"></div>
+            <div id="copy-step-1" class="p-5 space-y-3">
+                <p class="caption">Step 1 — Select the asset to copy <strong class="text-[var(--text-2)]">from</strong>:</p>
+                <div id="copy-source-list" class="max-h-48 overflow-y-auto custom-scrollbar"></div>
                 <button type="button" onclick="goToCopyStep2()"
-                    class="w-full py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-xs font-medium">Next
+                    class="w-full btn btn-primary">Next
                     →</button>
             </div>
 
             <!-- Step 2: Targets -->
-            <div id="copy-step-2" class="p-4 space-y-3 hidden">
-                <p class="text-xs text-slate-400">Step 2 — Select assets to copy <strong>to</strong>:</p>
-                <div id="copy-target-list" class="space-y-1 max-h-48 overflow-y-auto"></div>
+            <div id="copy-step-2" class="p-5 space-y-3 hidden">
+                <p class="caption">Step 2 — Select assets to copy <strong class="text-[var(--text-2)]">to</strong>:</p>
+                <div id="copy-target-list" class="max-h-48 overflow-y-auto custom-scrollbar"></div>
                 <div class="flex gap-2">
                     <button type="button" onclick="goBackToCopyStep1()"
-                        class="flex-1 py-1.5 bg-slate-600 hover:bg-slate-700 text-white rounded text-xs font-medium">←
+                        class="flex-1 btn btn-secondary">←
                         Back</button>
                     <button type="button" onclick="executeLotCopy()"
-                        class="flex-1 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded text-xs font-medium">Copy</button>
+                        class="flex-1 btn btn-primary">Copy</button>
                 </div>
             </div>
 
             <!-- Success state -->
-            <div id="copy-success" class="p-4 text-center hidden">
-                <div class="text-green-400 text-2xl mb-2">✓</div>
-                <p class="text-xs text-slate-300">Lot setup copied and saved to the backend.</p>
+            <div id="copy-success" class="p-6 text-center hidden">
+                <div class="text-[var(--success)] text-2xl mb-2">✓</div>
+                <p class="caption">Lot setup copied and saved to the backend.</p>
                 <button type="button" onclick="closeCopyLotsModal()"
-                    class="mt-3 w-full py-1.5 bg-slate-600 hover:bg-slate-700 text-white rounded text-xs font-medium">Done</button>
+                    class="mt-4 w-full btn btn-secondary">Done</button>
             </div>
             <!-- Differing-sets prompt -->
-            <div id="copy-diff-prompt" class="p-4 space-y-3 hidden">
-                <p id="copy-diff-msg" class="text-xs text-slate-300">The source has a different number of sets than some
+            <div id="copy-diff-prompt" class="p-5 space-y-3 hidden">
+                <p id="copy-diff-msg" class="text-xs text-[var(--text-2)]">The source has a different number of sets than some
                     targets.</p>
-                <div class="text-xs text-slate-400">Choose how to handle targets with differing sets:</div>
-                <div class="space-y-2">
-                    <label class="flex items-center space-x-2">
+                <div class="caption">Choose how to handle targets with differing sets:</div>
+                <div class="space-y-1">
+                    <label class="flex items-center gap-2 min-h-[40px]">
                         <input type="radio" name="copy-diff-choice" value="overwrite" checked>
-                        <span>Overwrite target sets to match the source (recommended)</span>
+                        <span class="text-xs text-[var(--text)]">Overwrite target sets to match the source (recommended)</span>
                     </label>
-                    <label class="flex items-center space-x-2">
+                    <label class="flex items-center gap-2 min-h-[40px]">
                         <input type="radio" name="copy-diff-choice" value="match">
-                        <span>Copy only matching set indices (don't change number of sets)</span>
+                        <span class="text-xs text-[var(--text)]">Copy only matching set indices (don't change number of sets)</span>
                     </label>
                 </div>
                 <div class="flex gap-2">
                     <button type="button" onclick="confirmCopyChoice()"
-                        class="flex-1 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-xs font-medium">Confirm</button>
+                        class="flex-1 btn btn-primary">Confirm</button>
                     <button type="button" onclick="cancelCopyChoice()"
-                        class="flex-1 py-1.5 bg-slate-600 hover:bg-slate-700 text-white rounded text-xs font-medium">Cancel</button>
+                        class="flex-1 btn btn-secondary">Cancel</button>
                 </div>
             </div>
         </div>
@@ -437,16 +437,16 @@
 
                 <!-- Session History Panel -->
                 <div
-                    class="lg:col-span-3 bg-white dark:bg-slate-800 p-3 sm:p-4 md:p-5 rounded-lg border border-slate-200 dark:border-slate-700">
+                    class="card p-4 md:p-5">
                     <div class="flex flex-col xs:flex-row xs:justify-between xs:items-center gap-2 mb-3">
-                        <h2 class="text-base sm:text-lg font-semibold">Session History</h2>
+                        <h2 class="section-title">Session History</h2>
                         <button onclick="loadHistory()"
-                            class="text-xs bg-slate-600 hover:bg-slate-700 text-white px-2 sm:px-3 py-1 rounded">
+                            class="btn btn-sm btn-secondary">
                             Refresh
                         </button>
                     </div>
-                    <div id="history-list" class="space-y-1 sm:space-y-2 max-h-32 sm:max-h-48 overflow-y-auto">
-                        <p class="text-slate-500 text-xs sm:text-sm text-center py-2 sm:py-4">Click "Refresh" to load
+                    <div id="history-list" class="max-h-32 sm:max-h-48 overflow-y-auto custom-scrollbar">
+                        <p class="caption text-center py-2 sm:py-4">Click "Refresh" to load
                             session history</p>
                     </div>
                 </div>
@@ -664,12 +664,12 @@
             const defaultSource = getDefaultCopySourceSymbol();
             list.innerHTML = symbols.length
                 ? symbols.map(symbol => `
-                    <label class="flex items-center gap-2 p-1 rounded hover:bg-slate-700/30 cursor-pointer">
-                        <input type="radio" name="copy-source" value="${symbol}" class="h-4 w-4 accent-indigo-500">
-                        <span class="text-xs text-slate-200">${symbol}</span>
+                    <label class="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-[var(--surface-2)] cursor-pointer border-b border-[var(--line)] last:border-b-0">
+                        <input type="radio" name="copy-source" value="${symbol}" class="accent-[var(--accent)] w-4 h-4">
+                        <span class="text-xs text-[var(--text)]">${symbol}</span>
                     </label>
                 `)
-                : '<p class="text-xs text-slate-400">No enabled assets available.</p>';
+                : '<p class="caption px-3 py-2">No enabled assets available.</p>';
             // Explicitly set .checked as a DOM property (not just HTML attribute) so
             // querySelector(':checked') reliably finds it in goToCopyStep2
             const defaultRadio = list.querySelector(`input[value="${defaultSource}"]`);
@@ -687,12 +687,12 @@
                     .map(([symbol]) => symbol);
             list.innerHTML = symbols.length
                 ? symbols.map(symbol => `
-                    <label class="flex items-center gap-2 p-1 rounded hover:bg-slate-700/30 cursor-pointer">
-                        <input type="checkbox" name="copy-target" value="${symbol}" class="h-4 w-4 accent-emerald-500" ${preferredTargets.includes(symbol) ? 'checked' : ''}>
-                        <span class="text-xs text-slate-200">${symbol}</span>
+                    <label class="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-[var(--surface-2)] cursor-pointer border-b border-[var(--line)] last:border-b-0">
+                        <input type="checkbox" name="copy-target" value="${symbol}" class="accent-[var(--accent)] w-4 h-4" ${preferredTargets.includes(symbol) ? 'checked' : ''}>
+                        <span class="text-xs text-[var(--text)]">${symbol}</span>
                     </label>
                 `)
-                : '<p class="text-xs text-slate-400">No other enabled assets available.</p>';
+                : '<p class="caption px-3 py-2">No other enabled assets available.</p>';
         }
 
         function goToCopyStep2() {
@@ -1039,20 +1039,20 @@
         // --- History Functions ---
         async function loadHistory() {
             const container = document.getElementById('history-list');
-            container.innerHTML = '<p class="text-slate-400 text-sm text-center py-2">Loading...</p>';
+            container.innerHTML = '<p class="caption text-center py-2">Loading...</p>';
 
             const sessions = await apiCall('/history');
             if (!sessions || sessions.length === 0) {
-                container.innerHTML = '<p class="text-slate-500 text-sm text-center py-4">No session history found</p>';
+                container.innerHTML = '<p class="caption text-center py-4">No session history found</p>';
                 return;
             }
 
             container.innerHTML = sessions.map(s => `
-                <div class="flex flex-wrap justify-between items-center gap-2 p-2 bg-slate-900 rounded border border-slate-700">
-                    <span class="text-sm text-slate-300 break-all">${s.name}</span>
+                <div class="flex flex-wrap justify-between items-center gap-2 p-3 border-b border-[var(--line)]">
+                    <span class="text-sm text-[var(--text)] break-all">${s.name}</span>
                     <div class="flex gap-2">
-                        <button onclick="viewSession('${s.id}')" class="text-xs bg-blue-600 hover:bg-blue-700 px-3 py-2 rounded">View</button>
-                        <button onclick="downloadSession('${s.id}', '${s.name}')" class="text-xs bg-green-600 hover:bg-green-700 px-3 py-2 rounded">Download</button>
+                        <button onclick="viewSession('${s.id}')" class="btn btn-sm btn-secondary">View</button>
+                        <button onclick="downloadSession('${s.id}', '${s.name}')" class="btn btn-sm btn-secondary">Download</button>
                     </div>
                 </div>
             `).join('');
@@ -1489,14 +1489,17 @@
 
     <!-- Volume limit warning popup -->
     <div id="volume-warning-popup"
-        class="fixed right-4 bottom-4 bg-red-600 text-white p-3 rounded shadow-lg hidden z-50 max-w-sm">
-        <div class="flex items-start gap-3">
-            <div class="flex-1">
-                <div class="text-sm font-semibold">Volume limit exceeded for <span class="vw-symbol"></span></div>
-                <div class="text-xs opacity-90 mt-1 vw-field"></div>
-            </div>
-            <div class="flex-shrink-0">
-                <button onclick="_hideVolumeWarning()" class="text-white/90 hover:text-white">Dismiss</button>
+        class="fixed right-4 bottom-4 max-w-sm rounded-xl bg-[var(--surface)] border border-[var(--line)] shadow-2xl hidden z-50 overflow-hidden">
+        <div class="flex items-stretch">
+            <div class="w-[3px] flex-shrink-0 bg-[var(--danger)]"></div>
+            <div class="flex items-start gap-3 p-3 flex-1">
+                <div class="flex-1 min-w-0">
+                    <div class="text-sm font-semibold text-[var(--text)]">Volume limit exceeded for <span class="vw-symbol"></span></div>
+                    <div class="caption mt-1 vw-field"></div>
+                </div>
+                <div class="flex-shrink-0">
+                    <button onclick="_hideVolumeWarning()" class="text-sm font-medium text-[var(--accent)] hover:opacity-75">Dismiss</button>
+                </div>
             </div>
         </div>
     </div>
