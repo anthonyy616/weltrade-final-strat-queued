@@ -363,6 +363,126 @@ input[type=number] {
   color: var(--text-3);
 }
 
+/* --- Cards and wells ------------------------------------------------------- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+
+.well {
+  background: var(--surface-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-chip);
+}
+
+.section-title {
+  font-size: 17px;
+  line-height: 1.3;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+/* --- Fields ---------------------------------------------------------------- */
+
+.field-label {
+  font-size: 12px;
+  line-height: 1.3;
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+.field {
+  width: 100%;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: var(--radius-field);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+input.field[type="number"] {
+  text-align: right;
+}
+
+.field:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  outline: none;
+}
+
+.field:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+select.field {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5' fill='none' stroke='%236E6E73' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 28px;
+}
+
+/* Volume-limit flag: JS toggles border-2 border-red-500 on lot inputs.
+   Reserve the real border on every input so adding the flag never shifts
+   layout; these two class names then render as the danger state. */
+.field-vol {
+  border: 1px solid var(--line-strong);
+}
+
+input.border-2.border-red-500,
+select.border-2.border-red-500 {
+  border-width: 1px;
+  border-color: var(--danger);
+  background: var(--danger-soft);
+  box-shadow: 0 0 0 1px var(--danger) inset;
+}
+
+/* --- Per-asset panels ------------------------------------------------------- */
+
+.asset-panel {
+  background: var(--surface-2);
+  border-radius: var(--radius-chip);
+  padding: 12px;
+}
+
+.btn-sm {
+  height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+/* --- Asset picker checkbox row ---------------------------------------------- */
+
+.symbol-check {
+  accent-color: var(--accent);
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+/* --- Live terminal ----------------------------------------------------------- */
+
+#logs {
+  background: var(--surface-2);
+  color: var(--text);
+  border-radius: var(--radius-chip);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 /* ==========================================================================
    Mobile optimizations
    ========================================================================== */
@@ -378,8 +498,13 @@ input[type=number] {
 
   /* 44px targets on touch screens */
   .btn,
-  .icon-btn {
+  .icon-btn,
+  .field {
     height: 44px;
+  }
+  /* ...but small per-asset buttons stay compact */
+  .btn.btn-sm {
+    height: 36px;
   }
   .icon-btn {
     width: 44px;

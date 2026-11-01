@@ -47,29 +47,29 @@
 
 <body class="p-4 md:p-6 bg-[var(--bg)] text-[var(--text)] font-sans antialiased transition-colors duration-300">
 
-    <div id="login-modal" class="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center">
+    <div id="login-modal" class="fixed inset-0 bg-black/40 backdrop-blur-md z-50 flex items-center justify-center">
         <div
-            class="bg-white dark:bg-slate-800 p-5 sm:p-8 rounded-lg shadow-2xl w-full max-w-md border border-slate-200 dark:border-slate-700 mx-4">
-            <h2 class="text-xl sm:text-2xl font-bold text-center mb-6 text-blue-500">Weltrade Bot Login</h2>
+            class="bg-[var(--surface)] dark:bg-[var(--surface)] p-6 sm:p-8 rounded-[20px] shadow-2xl w-full max-w-[380px] border border-[var(--line)] mx-4 text-[var(--text)]">
+            <h2 class="section-title text-center mb-6">Weltrade Bot Login</h2>
             <form id="form-login" onsubmit="handleSupabaseLogin(event)" class="space-y-4">
                 <div>
-                    <label class="block text-sm font-medium mb-1">Email</label>
+                    <label class="field-label block mb-1">Email</label>
                     <input type="email" id="email"
-                        class="w-full p-2 rounded bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 outline-none"
+                        class="field"
                         required placeholder="user@example.com">
                 </div>
                 <div>
-                    <label class="block text-sm font-medium mb-1">Password</label>
+                    <label class="field-label block mb-1">Password</label>
                     <input type="password" id="password"
-                        class="w-full p-2 rounded bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 outline-none"
+                        class="field"
                         required placeholder="••••••••">
                 </div>
                 <button type="submit" id="login-btn"
-                    class="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded font-medium transition flex justify-center items-center gap-2">
+                    class="w-full btn btn-primary">
                     <span>Sign In / Register</span>
                 </button>
             </form>
-            <p id="login-error" class="text-red-500 text-sm text-center mt-4 hidden"></p>
+            <p id="login-error" class="text-xs text-[var(--danger)] text-center mt-4 hidden"></p>
         </div>
 
     </div>
@@ -221,84 +221,82 @@
 
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6 mt-4 md:mt-6">
             <div id="view-config"
-                class="hidden md:block lg:col-span-1 bg-white dark:bg-slate-800 p-3 sm:p-4 md:p-5 rounded-lg border border-slate-200 dark:border-slate-700 lg:h-fit shadow-sm">
-                <h2
-                    class="text-base sm:text-lg font-semibold mb-3 border-b pb-2 border-slate-200 dark:border-slate-700">
+                class="hidden md:block lg:col-span-1 card p-4 md:p-5 lg:h-fit">
+                <h2 class="section-title mb-4 pb-3 border-b border-[var(--line)]">
                     Settings</h2>
                 <form onsubmit="updateConfig(event)" class="space-y-4">
 
                     <div class="space-y-4">
                         <div>
-                            <label class="block text-xs font-bold text-gray-500 mb-2">Indices (Multi-Select)</label>
+                            <label class="field-label block mb-2">Indices (multi-select)</label>
                             <div
-                                class="grid grid-cols-2 gap-1 p-2 rounded bg-slate-50 dark:bg-slate-900 border border-slate-600 max-h-60 overflow-y-auto custom-scrollbar">
+                                class="grid grid-cols-2 gap-1 p-2 rounded-xl bg-[var(--surface-2)] max-h-60 overflow-y-auto custom-scrollbar">
 
-                                <!-- FX Indices -->
-                                <div
-                                    class="col-span-2 text-[10px] font-bold text-blue-500 uppercase tracking-wider mb-1 mt-1">
-                                    FX Indices</div>
+                                <!-- FX indices -->
+                                <div class="col-span-2 caption mb-1 mt-1">
+                                    FX indices</div>
                                 <label
-                                    class="flex items-center space-x-2 cursor-pointer hover:bg-slate-200 dark:hover:bg-slate-800 p-1 rounded transition">
-                                    <input type="checkbox" class="symbol-check accent-blue-600 h-4 w-4"
+                                    class="flex items-center gap-2 cursor-pointer hover:bg-[var(--surface-3)] p-1.5 rounded-lg transition">
+                                    <input type="checkbox" class="symbol-check"
                                         value="FX Vol 20">
                                     <span class="text-xs font-medium">FX Vol 20</span>
                                 </label>
                                 <label
-                                    class="flex items-center space-x-2 cursor-pointer hover:bg-slate-200 dark:hover:bg-slate-800 p-1 rounded transition">
-                                    <input type="checkbox" class="symbol-check accent-blue-600 h-4 w-4"
+                                    class="flex items-center gap-2 cursor-pointer hover:bg-[var(--surface-3)] p-1.5 rounded-lg transition">
+                                    <input type="checkbox" class="symbol-check"
                                         value="FX Vol 40">
                                     <span class="text-xs font-medium">FX Vol 40</span>
                                 </label>
                                 <label
-                                    class="flex items-center space-x-2 cursor-pointer hover:bg-slate-200 dark:hover:bg-slate-800 p-1 rounded transition">
-                                    <input type="checkbox" class="symbol-check accent-blue-600 h-4 w-4"
+                                    class="flex items-center gap-2 cursor-pointer hover:bg-[var(--surface-3)] p-1.5 rounded-lg transition">
+                                    <input type="checkbox" class="symbol-check"
                                         value="FX Vol 60">
                                     <span class="text-xs font-medium">FX Vol 60</span>
                                 </label>
                                 <label
-                                    class="flex items-center space-x-2 cursor-pointer hover:bg-slate-200 dark:hover:bg-slate-800 p-1 rounded transition">
-                                    <input type="checkbox" class="symbol-check accent-blue-600 h-4 w-4"
+                                    class="flex items-center gap-2 cursor-pointer hover:bg-[var(--surface-3)] p-1.5 rounded-lg transition">
+                                    <input type="checkbox" class="symbol-check"
                                         value="FX Vol 80">
                                     <span class="text-xs font-medium">FX Vol 80</span>
                                 </label>
                                 <label
-                                    class="flex items-center space-x-2 cursor-pointer hover:bg-slate-200 dark:hover:bg-slate-800 p-1 rounded transition">
-                                    <input type="checkbox" class="symbol-check accent-blue-600 h-4 w-4"
+                                    class="flex items-center gap-2 cursor-pointer hover:bg-[var(--surface-3)] p-1.5 rounded-lg transition">
+                                    <input type="checkbox" class="symbol-check"
                                         value="FX Vol 99">
                                     <span class="text-xs font-medium">FX Vol 99</span>
                                 </label>
 
-                                <!-- SFX Indices -->
+                                <!-- SFX indices -->
                                 <div
-                                    class="col-span-2 text-[10px] font-bold text-purple-500 uppercase tracking-wider mt-3 mb-1 border-t border-slate-700 pt-2">
-                                    SFX Indices</div>
+                                    class="col-span-2 caption mt-3 mb-1 border-t border-[var(--line)] pt-2">
+                                    SFX indices</div>
                                 <label
-                                    class="flex items-center space-x-2 cursor-pointer hover:bg-slate-200 dark:hover:bg-slate-800 p-1 rounded transition">
-                                    <input type="checkbox" class="symbol-check accent-purple-600 h-4 w-4"
+                                    class="flex items-center gap-2 cursor-pointer hover:bg-[var(--surface-3)] p-1.5 rounded-lg transition">
+                                    <input type="checkbox" class="symbol-check"
                                         value="SFX Vol 20">
                                     <span class="text-xs font-medium">SFX Vol 20</span>
                                 </label>
                                 <label
-                                    class="flex items-center space-x-2 cursor-pointer hover:bg-slate-200 dark:hover:bg-slate-800 p-1 rounded transition">
-                                    <input type="checkbox" class="symbol-check accent-purple-600 h-4 w-4"
+                                    class="flex items-center gap-2 cursor-pointer hover:bg-[var(--surface-3)] p-1.5 rounded-lg transition">
+                                    <input type="checkbox" class="symbol-check"
                                         value="SFX Vol 40">
                                     <span class="text-xs font-medium">SFX Vol 40</span>
                                 </label>
                                 <label
-                                    class="flex items-center space-x-2 cursor-pointer hover:bg-slate-200 dark:hover:bg-slate-800 p-1 rounded transition">
-                                    <input type="checkbox" class="symbol-check accent-purple-600 h-4 w-4"
+                                    class="flex items-center gap-2 cursor-pointer hover:bg-[var(--surface-3)] p-1.5 rounded-lg transition">
+                                    <input type="checkbox" class="symbol-check"
                                         value="SFX Vol 60">
                                     <span class="text-xs font-medium">SFX Vol 60</span>
                                 </label>
                                 <label
-                                    class="flex items-center space-x-2 cursor-pointer hover:bg-slate-200 dark:hover:bg-slate-800 p-1 rounded transition">
-                                    <input type="checkbox" class="symbol-check accent-purple-600 h-4 w-4"
+                                    class="flex items-center gap-2 cursor-pointer hover:bg-[var(--surface-3)] p-1.5 rounded-lg transition">
+                                    <input type="checkbox" class="symbol-check"
                                         value="SFX Vol 80">
                                     <span class="text-xs font-medium">SFX Vol 80</span>
                                 </label>
                                 <label
-                                    class="flex items-center space-x-2 cursor-pointer hover:bg-slate-200 dark:hover:bg-slate-800 p-1 rounded transition">
-                                    <input type="checkbox" class="symbol-check accent-purple-600 h-4 w-4"
+                                    class="flex items-center gap-2 cursor-pointer hover:bg-[var(--surface-3)] p-1.5 rounded-lg transition">
+                                    <input type="checkbox" class="symbol-check"
                                         value="SFX Vol 99">
                                     <span class="text-xs font-medium">SFX Vol 99</span>
                                 </label>
@@ -309,8 +307,8 @@
                         <!-- Copy Lots button -->
                         <div class="mt-2">
                             <button type="button" id="copy-lot-btn" onclick="openCopyLotsModal()"
-                                class="w-full py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-xs font-medium flex items-center justify-center gap-1">
-                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 inline-block mr-1"
+                                class="w-full btn btn-secondary">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4"
                                     viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                                     <path stroke-linecap="round" stroke-linejoin="round"
                                         d="M9 12h6M9 16h6M9 8h6M3 6h.01M3 12h.01M3 18h.01M21 6h.01M21 12h.01M21 18h.01" />
@@ -326,64 +324,62 @@
                     </div>
 
                     <!-- Global Settings -->
-                    <div
-                        class="p-3 border border-slate-300 dark:border-slate-700 rounded bg-slate-50 dark:bg-slate-900/30">
-                        <label class="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-2"><svg
+                    <div class="p-4 rounded-xl bg-[var(--surface-2)]">
+                        <label class="field-label block mb-3"><svg
                                 xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                stroke-width="1.5" class="h-4 w-4 inline-block mr-1 text-purple-500">
+                                stroke-width="1.5" class="h-4 w-4 inline-block mr-1 text-[var(--text-2)]">
                                 <path stroke-linecap="round" stroke-linejoin="round"
                                     d="M11.049 2.927c.3-1.1 1.92-1.1 1.92-1.1 1.1.3 1.92 1.1 2.22 0l.2-.737a1 1 0 0 0 .948-.738l.77.04a1 1 0 0 0 .65-1.92l-.635-.313a1 1 0 0 0-.364-1.364l-.29-.53c-.52-.95.2-2.09 1.34-2.09h.86a1 1 0 0 0 .94-.667l.25-.66c.35-.93 1.7-.93 2.05 0l.25.66a1 1 0 0 0 .94.667h.86c1.14 0 1.86 1.14 1.34 2.09l-.29.53a1 1 0 0 0 .364 1.364l.635.313a1 1 0 0 1-.65 1.92l-.77-.04a1 1 0 0 0-.948.738l-.2.737z" />
-                            </svg> Global Settings</label>
-                        <div class="grid grid-cols-2 gap-1.5">
+                            </svg> Global settings</label>
+                        <div class="grid grid-cols-2 gap-3">
                             <div>
-                                <label class="block text-[10px] text-gray-500 dark:text-gray-400 mb-0">Max Time
-                                    (Min)</label>
+                                <label class="field-label block mb-1">Max time (min)</label>
                                 <input type="number" id="max_runtime_minutes" value="0" oninput="scheduleAutoSave()"
-                                    class="w-full p-1.5 text-sm rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                    class="field">
                             </div>
 
                             <!-- Auto-save toggle -->
                             <div
-                                class="col-span-2 flex items-center justify-between mt-1 p-1.5 bg-slate-800 rounded border border-slate-600">
-                                <label class="text-[10px] text-slate-400 leading-tight">
+                                class="col-span-2 flex items-center justify-between mt-1 gap-3">
+                                <label class="text-xs font-medium text-[var(--text-2)] leading-tight">
                                     Auto-save config<br>
-                                    <span class="text-[9px] text-slate-500">Saves on field change</span>
+                                    <span class="caption">Saves on field change</span>
                                 </label>
                                 <button type="button" id="autosave-toggle" onclick="toggleAutoSave()"
-                                    class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors bg-slate-600"
+                                    class="relative inline-flex h-[26px] w-[44px] shrink-0 items-center rounded-full transition-colors bg-[var(--surface-3)] border border-[var(--line-strong)]"
                                     role="switch" aria-checked="false">
                                     <span id="autosave-knob"
-                                        class="inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform translate-x-1"></span>
+                                        class="inline-block h-[22px] w-[22px] rounded-full bg-white shadow-md transition-transform translate-x-[3px]"></span>
                                 </button>
                             </div>
                             <div class="col-span-2 text-right">
-                                <div id="autosave-status" class="text-[9px] text-slate-500 hidden">Saved ✓</div>
+                                <div id="autosave-status" class="caption hidden">Saved ✓</div>
                             </div>
                             <!-- Limit-trigger global settings (doc 08 §4) -->
-                            <div class="col-span-2 text-[10px] font-bold text-purple-500 uppercase tracking-wider border-t border-slate-600 pt-2">Limit-Trigger</div>
+                            <div class="col-span-2 field-label border-t border-[var(--line)] pt-3">Limit-trigger</div>
                             <div>
-                                <label class="block text-[10px] text-gray-500 dark:text-gray-400 mb-0">Armed Timeout (s)</label>
+                                <label class="field-label block mb-1">Armed timeout (s)</label>
                                 <input type="number" id="armed_timeout_seconds" value="120" min="10" max="3600" oninput="scheduleAutoSave()"
-                                    class="w-full p-1.5 text-sm rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                    class="field">
                             </div>
                             <div>
-                                <label class="block text-[10px] text-gray-500 dark:text-gray-400 mb-0">Win Fill (ms)</label>
+                                <label class="field-label block mb-1">Win fill (ms)</label>
                                 <input type="number" id="win_fill_deadline_ms" value="1500" min="100" max="60000" oninput="scheduleAutoSave()"
-                                    class="w-full p-1.5 text-sm rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                    class="field">
                             </div>
                             <div>
-                                <label class="block text-[10px] text-gray-500 dark:text-gray-400 mb-0">Cancel Ack (ms)</label>
+                                <label class="field-label block mb-1">Cancel ack (ms)</label>
                                 <input type="number" id="cancel_ack_deadline_ms" value="1500" min="100" max="60000" oninput="scheduleAutoSave()"
-                                    class="w-full p-1.5 text-sm rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                    class="field">
                             </div>
                             <div class="col-span-2">
-                                <label class="block text-[10px] text-gray-500 dark:text-gray-400 mb-0">Max Consecutive Open Failures</label>
+                                <label class="field-label block mb-1">Max consecutive open failures</label>
                                 <input type="number" id="max_consecutive_open_failures" value="3" min="1" max="100" oninput="scheduleAutoSave()"
-                                    class="w-full p-1.5 text-sm rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                    class="field">
                             </div>
-                            <div class="col-span-2 text-[9px] text-slate-500">Only used by symbols set to Limit Trigger open mode. Burst is unaffected.</div>
-                            <div class="col-span-2 text-[10px] leading-relaxed text-slate-500 dark:text-slate-400 border-t border-slate-700 pt-2">
-                                <strong>What these do:</strong> Max Time is the session limit in minutes (0 = no limit).
+                            <div class="col-span-2 caption">Only used by symbols set to Limit Trigger open mode. Burst is unaffected.</div>
+                            <div class="col-span-2 caption border-t border-[var(--line)] pt-3">
+                                <strong class="text-[var(--text-2)]">What these do:</strong> Max Time is the session limit in minutes (0 = no limit).
                                 Armed Timeout is how long a limit-trigger setup may wait for a fill. Win Fill and
                                 Cancel Ack are broker-response deadlines in milliseconds. Burst Timing controls whether
                                 contingent market orders wait for pending-order cancellation or run in parallel.
@@ -393,18 +389,18 @@
                     </div>
 
                     <button type="submit"
-                        class="w-full py-1.5 sm:py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs sm:text-sm font-medium transition hover:shadow-lg">
+                        class="w-full btn btn-primary">
                         Update Configuration
                     </button>
 
                     <!-- Start/Stop All Controls -->
-                    <div class="grid grid-cols-2 gap-1 sm:gap-2 mt-2">
+                    <div class="grid grid-cols-2 gap-2 mt-2">
                         <button type="button" onclick="startAllSymbols()"
-                            class="w-full py-1.5 sm:py-2 bg-green-600 hover:bg-green-700 text-white rounded text-xs sm:text-sm font-medium">
+                            class="w-full btn btn-success">
                             Start All
                         </button>
                         <button type="button" onclick="stopAllSymbols()"
-                            class="w-full py-1.5 sm:py-2 bg-yellow-600 hover:bg-yellow-700 text-white rounded text-xs sm:text-sm font-medium"
+                            class="w-full btn btn-secondary"
                             title="Graceful stop: completes trades to max positions first">
                             Stop All
                         </button>
@@ -412,26 +408,26 @@
 
                     <!-- Terminate All (Nuclear) -->
                     <button type="button" onclick="terminateAllSymbols()"
-                        class="w-full py-1.5 sm:py-2 mt-2 bg-red-800 hover:bg-red-900 text-white rounded text-xs sm:text-sm font-bold border-2 border-red-600"
+                        class="w-full btn btn-danger-solid mt-4"
                         title="NUCLEAR: Closes ALL positions immediately for ALL assets">
-                        TERMINATE ALL
+                        Terminate All
                     </button>
 
                     <p
-                        class="text-xs sm:text-sm text-slate-600 dark:text-slate-400 mt-2 p-1.5 sm:p-2 bg-slate-100 dark:bg-slate-800/50 rounded border border-slate-300 dark:border-slate-700">
-                        <strong>Queued Close:</strong> Moving opens on tick freq; constants queue to close at grid
-                        targets. <strong>Graceful stop:</strong> Waits for cycle finish. <strong>Nuclear:</strong>
+                        class="text-xs text-[var(--text-2)] mt-2 p-3 rounded-xl bg-[var(--surface-2)]">
+                        <strong class="text-[var(--text)]">Queued Close:</strong> Moving opens on tick freq; constants queue to close at grid
+                        targets. <strong class="text-[var(--text)]">Graceful stop:</strong> Waits for cycle finish. <strong class="text-[var(--text)]">Nuclear:</strong>
                         Closes all immediately.
                     </p>
                 </form>
 
                 <!-- Live Terminal inside config view -->
                 <div
-                    class="mt-4 md:mt-6 bg-slate-50 dark:bg-slate-800/50 p-3 sm:p-4 rounded-lg border border-slate-200 dark:border-slate-700 flex flex-col h-[300px] md:h-[400px]">
-                    <h2 class="text-base sm:text-lg font-semibold mb-2 text-slate-800 dark:text-slate-200">Live Terminal
+                    class="mt-6 rounded-[16px] border border-[var(--line)] bg-[var(--surface)] p-4 flex flex-col h-[300px] md:h-[400px]">
+                    <h2 class="section-title mb-3">Live Terminal
                     </h2>
                     <div id="logs"
-                        class="flex-1 bg-white dark:bg-slate-950 rounded p-2 sm:p-3 md:p-4 font-mono text-xs overflow-y-auto text-green-600 dark:text-green-400 border border-slate-200 dark:border-slate-800 shadow-inner">
+                        class="flex-1 p-3 overflow-y-auto custom-scrollbar">
                         <div>[System] Ready.</div>
                     </div>
                 </div>
@@ -458,7 +454,7 @@
         </div>
 
         <div
-            class="p-4 mt-6 bg-red-50 dark:bg-red-900/20 border-l-4 border-red-500 rounded text-sm text-red-800 dark:text-red-300 shadow-sm">
+            class="p-4 mt-6 bg-[var(--warning-soft)] rounded-xl text-sm text-[var(--text)]">
             <strong>Important:</strong> Always press <strong>TERMINATE ALL</strong> twice and confirm it in the live
             terminal on the site after the max time set in the config has elapsed. This is necessary due to the
             in-server DB file that we utilize for crashes and recovery. If you do not perform this step, the bot will
@@ -801,9 +797,9 @@
             const status = document.getElementById('autosave-status');
             if (!toggle) return;
             toggle.setAttribute('aria-checked', String(!!autoSaveEnabled));
-            toggle.className = `relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${autoSaveEnabled ? 'bg-emerald-500' : 'bg-slate-600'}`;
+            toggle.className = `relative inline-flex h-[26px] w-[44px] shrink-0 items-center rounded-full transition-colors border ${autoSaveEnabled ? 'bg-[var(--success)] border-transparent' : 'bg-[var(--surface-3)] border-[var(--line-strong)]'}`;
             if (knob) {
-                knob.className = `inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${autoSaveEnabled ? 'translate-x-5' : 'translate-x-1'}`;
+                knob.className = `inline-block h-[22px] w-[22px] rounded-full bg-white shadow-md transition-transform ${autoSaveEnabled ? 'translate-x-[19px]' : 'translate-x-[3px]'}`;
             }
             if (status) {
                 status.textContent = autoSaveEnabled ? 'Auto-save enabled' : 'Auto-save disabled';
@@ -994,7 +990,7 @@
         function log(msg) {
             const logs = document.getElementById('logs');
             const time = new Date().toLocaleTimeString();
-            logs.innerHTML = `<div class="mb-1"><span class="text-slate-500">[${time}]</span> ${msg}</div>` + logs.innerHTML;
+            logs.innerHTML = `<div class="mb-1"><span class="text-[var(--text-3)]">[${time}]</span> ${msg}</div>` + logs.innerHTML;
         }
 
         // --- Session Timer Helpers ---
@@ -1343,70 +1339,70 @@
             container.innerHTML = enabledSymbols.map(([symbol, cfg]) => {
                 const safe = safeIdFromSymbol(symbol);
                 return `
-                <div class="p-3 border border-slate-300 dark:border-slate-700 rounded bg-slate-50 dark:bg-slate-900/30 space-y-2">
+                <div class="asset-panel space-y-3">
                     <label class="flex items-center justify-between cursor-pointer">
-                        <span class="text-sm font-bold">${symbol}</span>
+                        <span class="text-sm font-semibold">${symbol}</span>
                         <span class="flex items-center gap-2">
-                            <span class="text-[10px] text-slate-500">Enable</span>
+                            <span class="text-[11px] text-[var(--text-3)]">Enable</span>
                             <input type="checkbox" id="sym_${safe}_enabled" ${cfg.enabled ? 'checked' : ''}
-                                onchange="onSymbolToggle('${symbol}', this)" class="accent-blue-600 h-4 w-4">
+                                onchange="onSymbolToggle('${symbol}', this)" class="symbol-check">
                         </span>
                     </label>
-                    <div class="grid grid-cols-2 gap-1.5">
+                    <div class="grid grid-cols-2 gap-2">
                         <div>
-                            <label class="block text-[10px] text-gray-500 mb-0">Buy Count</label>
+                            <label class="block text-[11px] text-[var(--text-2)] mb-0.5">Buy Count</label>
                             <input type="number" id="sym_${safe}_buy_count" value="${cfg.buy_count ?? 5}" min="1" oninput="setLastInteracted('${symbol}', '${safe}'); scheduleAutoSave()"
-                                class="w-full p-1.5 text-sm rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                class="field">
                         </div>
                         <div>
-                            <label class="block text-[10px] text-gray-500 mb-0">Sell Count</label>
+                            <label class="block text-[11px] text-[var(--text-2)] mb-0.5">Sell Count</label>
                             <input type="number" id="sym_${safe}_sell_count" value="${cfg.sell_count ?? 5}" min="1" oninput="setLastInteracted('${symbol}', '${safe}'); scheduleAutoSave()"
-                                class="w-full p-1.5 text-sm rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                class="field">
                         </div>
                         <div>
-                            <label class="block text-[10px] text-gray-500 mb-0">Buy Lot</label>
+                            <label class="block text-[11px] text-[var(--text-2)] mb-0.5">Buy Lot</label>
                             <input type="number" step="0.01" id="sym_${safe}_buy_lot" value="${cfg.buy_lot ?? 0.01}" min="0.01" oninput="setLastInteracted('${symbol}', '${safe}'); scheduleAutoSave()"
-                                class="w-full p-1.5 text-sm rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                class="field">
                         </div>
                         <div>
-                            <label class="block text-[10px] text-gray-500 mb-0">Sell Lot</label>
+                            <label class="block text-[11px] text-[var(--text-2)] mb-0.5">Sell Lot</label>
                             <input type="number" step="0.01" id="sym_${safe}_sell_lot" value="${cfg.sell_lot ?? 0.01}" min="0.01" oninput="setLastInteracted('${symbol}', '${safe}'); scheduleAutoSave()"
-                                class="w-full p-1.5 text-sm rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                class="field">
                         </div>
                         <div>
-                            <label class="block text-[10px] text-gray-500 mb-0">Constant Side</label>
+                            <label class="block text-[11px] text-[var(--text-2)] mb-0.5">Constant Side</label>
                             <select id="sym_${safe}_constant_side" onchange="scheduleAutoSave()"
-                                class="w-full p-1.5 text-sm rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                class="field">
                                 <option value="buy" ${cfg.constant_side === 'buy' ? 'selected' : ''}>BUY</option>
                                 <option value="sell" ${cfg.constant_side !== 'buy' ? 'selected' : ''}>SELL</option>
                             </select>
                         </div>
                         <div>
-                            <label class="block text-[10px] text-gray-500 mb-0">Grid Distance</label>
+                            <label class="block text-[11px] text-[var(--text-2)] mb-0.5">Grid Distance</label>
                             <input type="number" step="0.1" id="sym_${safe}_grid_distance" value="${cfg.grid_distance ?? 50}" min="0.1" oninput="scheduleAutoSave()" onfocus="setLastInteracted('${symbol}', '${safe}')"
-                                class="w-full p-1.5 text-sm rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                class="field">
                         </div>
                         <div>
-                            <label class="block text-[10px] text-gray-500 mb-0">Moving Freq (s)</label>
+                            <label class="block text-[11px] text-[var(--text-2)] mb-0.5">Moving Freq (s)</label>
                             <input type="number" step="0.1" id="sym_${safe}_moving_freq" value="${cfg.moving_freq ?? 10}" min="0.1" oninput="scheduleAutoSave()" onfocus="setLastInteracted('${symbol}', '${safe}')"
-                                class="w-full p-1.5 text-sm rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                class="field">
                         </div>
                         <div>
-                            <label class="block text-[10px] text-gray-500 mb-0">Constant Freq (s)</label>
+                            <label class="block text-[11px] text-[var(--text-2)] mb-0.5">Constant Freq (s)</label>
                             <input type="number" step="0.1" id="sym_${safe}_constant_freq" value="${cfg.constant_freq ?? 8}" min="0.1" oninput="scheduleAutoSave()" onfocus="setLastInteracted('${symbol}', '${safe}')"
-                                class="w-full p-1.5 text-sm rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                class="field">
                         </div>
                         <div>
-                            <label class="block text-[10px] text-gray-500 mb-0">Entry Offset</label>
+                            <label class="block text-[11px] text-[var(--text-2)] mb-0.5">Entry Offset</label>
                             <input type="number" step="0.1" id="sym_${safe}_entry_offset" value="${cfg.entry_offset ?? 50}" min="0.1" oninput="scheduleAutoSave()" onfocus="setLastInteracted('${symbol}', '${safe}')"
-                                class="w-full p-1.5 text-sm rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                class="field">
                         </div>
                     </div>
                     <div id="sym_${safe}_volume_warning"
-                        class="hidden text-[11px] leading-relaxed text-red-700 dark:text-red-300 bg-red-100 dark:bg-red-900/30 border border-red-300 dark:border-red-700 rounded p-2">
+                        class="hidden text-[11px] leading-relaxed rounded-lg p-2 bg-[var(--danger-soft)] text-[var(--danger)]">
                     </div>
-                    <div class="text-[10px] leading-relaxed text-slate-500 dark:text-slate-400">
-                        <strong>Per-symbol settings:</strong> Counts are the number of positions opened per side;
+                    <div class="text-[11px] leading-relaxed text-[var(--text-2)]">
+                        <strong class="text-[var(--text-2)]">Per-symbol settings:</strong> Counts are the number of positions opened per side;
                         lots are the volume of each position. Constant Side identifies the side kept as the
                         constant leg. Grid Distance is the price spacing between cycles. Moving Freq and Constant
                         Freq are the seconds between moving and constant opens. All opens use parallel Limit
@@ -1415,18 +1411,18 @@
                     </div>
                     <div class="flex justify-end gap-1.5">
                         <button type="button" onclick="startSymbol('${symbol}')"
-                            class="text-xs bg-green-600 hover:bg-green-700 text-white px-3 py-2 rounded">Start</button>
+                            class="btn btn-sm btn-secondary">Start</button>
                         <button type="button" onclick="stopSymbol('${symbol}')"
-                            class="text-xs bg-yellow-600 hover:bg-yellow-700 text-white px-3 py-2 rounded">Stop</button>
+                            class="btn btn-sm btn-secondary">Stop</button>
                         <button type="button" onclick="terminateSymbol('${symbol}')"
-                            class="text-xs bg-red-700 hover:bg-red-800 text-white px-3 py-2 rounded">Kill</button>
+                            class="btn btn-sm btn-danger">Kill</button>
                     </div>
                 </div>
                 `;
             }).join('');
 
             if (enabledSymbols.length === 0) {
-                container.innerHTML = '<p class="text-xs text-slate-400 text-center py-2">No assets enabled yet — tick some indices above.</p>';
+                container.innerHTML = '<p class="caption text-center py-3">No assets enabled yet — tick some indices above.</p>';
             } else {
                 for (const [symbol] of enabledSymbols) {
                     validateSymbolVolume(symbol, safeIdFromSymbol(symbol), false);
